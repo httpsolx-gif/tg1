@@ -1,0 +1,15 @@
+aiogram<4,>=3.7
+pydantic<3,>=2
+pydantic-settings<3,>=2
+sqlalchemy<3,>=2.0.35
+sqlmodel>=0.0.21
+psycopg[binary]<4,>=3.2
+alembic<2,>=1.13
+aiosmtplib<4,>=3
+jinja2<4,>=3.1
+httpx<0.28,>=0.27
+fastapi<0.116,>=0.115
+uvicorn<0.31,>=0.30
+orjson<4,>=3.10
+python-json-logger<3,>=2.0
+cryptography<44,>=43
