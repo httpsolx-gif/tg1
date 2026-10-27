@@ -48,24 +48,31 @@ def kb_smtp_root() -> InlineKeyboardMarkup:
     # Add, Clear, Settings, Auto, Add auto, Clear auto, Forced change, Limit, Back
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="➕ Add", callback_data="smtp:add"),
+            InlineKeyboardButton(text="+ Add", callback_data="smtp:add"),
             InlineKeyboardButton(text="🧹 Clear", callback_data="smtp:clear"),
         ],
         [
             InlineKeyboardButton(text="⚙️ Settings", callback_data="smtp:settings"),
-            InlineKeyboardButton(text="🔁 Auto", callback_data="smtp:auto"),
+            InlineKeyboardButton(text="🔁 Auto/Лимиты", callback_data="slim:root"),
         ],
         [
             InlineKeyboardButton(text="📥 Add auto", callback_data="smtp:auto_add"),
             InlineKeyboardButton(text="🗑 Clear auto", callback_data="smtp:auto_clear"),
         ],
         [
-            InlineKeyboardButton(text="⏭ Forced change", callback_data="smtp:forced"),
-            InlineKeyboardButton(text="📈 Limit", callback_data="smtp:limit"),
+            InlineKeyboardButton(text="⏭ Forced change", callback_data="slim:forced"),
+            InlineKeyboardButton(text="📈 Limit", callback_data="slim:root"),
         ],
         [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="smtp:back"),
         ],
+    ])
+
+
+def _kb_add_cancel() -> InlineKeyboardMarkup:
+    # Инлайн-кнопка отмены ввода SMTP (возврат в корень SMTP + сброс FSM)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="smtp:add_cancel")],
     ])
 
 
@@ -75,7 +82,7 @@ def kb_smtp_clear() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🧽 Выборочно", callback_data="smtp:clear:pick"),
             InlineKeyboardButton(text="🗑 Неиспользуемые", callback_data="smtp:clear:unused"),
         ],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="smtp:back")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="smtp:root")],
     ])
 
 # --- Keyboard for pick-list for selective SMTP deletion ---
@@ -89,7 +96,7 @@ def _kb_clear_pick() -> InlineKeyboardMarkup:
             txt = f"🗑 {_escape_html(email)} — {cnt}"
             rows.append([InlineKeyboardButton(text=txt, callback_data=f"smtp:clear:del:{sid}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="smtp:clear")])
-    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")])
+    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # --- Keyboard for confirmation of unused SMTP deletion ---
@@ -99,7 +106,7 @@ def _kb_confirm_unused() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✅ Да, удалить", callback_data="smtp:clear:unused:yes"),
             InlineKeyboardButton(text="❌ Нет", callback_data="smtp:clear"),
         ],
-        [InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")],
+        [InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")],
     ])
 
 
@@ -110,7 +117,7 @@ def kb_group_root(prefix: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📮 Gmail", callback_data=f"smtp:{prefix}:gmail"),
             InlineKeyboardButton(text="📦 Main", callback_data=f"smtp:{prefix}:main"),
         ],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="smtp:back")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="smtp:root")],
     ])
 
 
@@ -182,7 +189,7 @@ def _kb_pick_global(group: str, current_id: int | None) -> InlineKeyboardMarkup:
         txt = f"{mark}{_escape_html(email)} — {cnt}"
         rows.append([InlineKeyboardButton(text=txt, callback_data=f"smtp:set:{group}:global:{sid}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:settings:{group}")])
-    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")])
+    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # --- Inline keyboard for picking country and country-scoped SMTP ---
@@ -203,7 +210,7 @@ def _kb_countries(group: str) -> InlineKeyboardMarkup:
         ]
         rows.append(btns)
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:settings:{group}")])
-    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")])
+    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def _kb_services_for_country(group: str, country_code: str) -> InlineKeyboardMarkup:
@@ -221,8 +228,8 @@ def _kb_services_for_country(group: str, country_code: str) -> InlineKeyboardMar
                 callback_data=f"smtp:service:{group}:{country_code}:{svc}"
             ) for svc in chunk
         ])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:settings:{group}")])
-    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:settings:{group}:countries")])
+    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def _kb_pick_service(group: str, country_code: str, service: str, current_id: Optional[int]) -> InlineKeyboardMarkup:
@@ -238,7 +245,7 @@ def _kb_pick_service(group: str, country_code: str, service: str, current_id: Op
             )
         ])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:country:{group}:{country_code}")])
-    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")])
+    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def _kb_pick_country(group: str, country_code: str, current_id: Optional[int]) -> InlineKeyboardMarkup:
@@ -248,8 +255,8 @@ def _kb_pick_country(group: str, country_code: str, current_id: Optional[int]) -
         mark = "✅ " if (current_id is not None and sid == current_id) else ""
         txt = f"{mark}{_escape_html(email)} — {cnt}"
         rows.append([InlineKeyboardButton(text=txt, callback_data=f"smtp:set:{group}:country:{country_code}:{sid}")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:countries:{group}:0")])
-    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:country:{group}:{country_code}")])
+    rows.append([InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 async def show_smtp_root(m: Message):
@@ -266,11 +273,11 @@ async def smtp_nav(cq: CallbackQuery, state: FSMContext):
     action = cq.data.split(":", 1)[1]
 
     if action == "add":
-        # Новое сообщение без инлайн-кнопок
         await cq.message.answer(
             "Введите SMTP в формате:\n"
             "<code>host:port:user:email:pass</code>\n\n"
-            "Либо пришлите <b>.txt</b> файл (каждая строка — одна запись)."
+            "Либо пришлите <b>.txt</b> файл (каждая строка — одна запись).",
+            reply_markup=_kb_add_cancel(),
         )
         await state.set_state(SmtpAdd.waiting_input)
         await cq.answer()
@@ -281,19 +288,35 @@ async def smtp_nav(cq: CallbackQuery, state: FSMContext):
             "Загрузка в автопул SMTP.\n\n"
             "Введите строки в формате:\n"
             "<code>host:port:user:email:pass</code>\n\n"
-            "Либо пришлите <b>.txt</b> файл (каждая строка — одна запись)."
+            "Либо пришлите <b>.txt</b> файл (каждая строка — одна запись).",
+            reply_markup=_kb_add_cancel(),
         )
         await state.set_state(SmtpAutoAdd.waiting_input)
         await cq.answer()
         return
 
-    if action == "back":
-        # Возврат из SMTP в админку снизу
+    if action == "add_cancel":
+        # Отмена ввода SMTP: чистим FSM и возвращаемся в корень SMTP
+        await state.clear()
         try:
-            await cq.message.edit_text("Админка:")
+            await cq.message.edit_text("SMTP — выберите действие:", reply_markup=kb_smtp_root())
         except Exception:
-            pass
-        await cq.message.answer("Админка:", reply_markup=admin_menu())
+            await cq.message.answer("SMTP — выберите действие:", reply_markup=kb_smtp_root())
+        await cq.answer("Отменено")
+        return
+
+    if action == "back":
+        # Возврат из SMTP в админку: удаляем инлайн-меню, показываем reply-меню одним сообщением
+        from bot.handlers.admin.index import back_to_admin
+        await back_to_admin(cq)
+        return
+
+    if action == "root":
+        # Возврат в корень раздела SMTP (остаёмся внутри инлайн-меню)
+        try:
+            await cq.message.edit_text("SMTP — выберите действие:", reply_markup=kb_smtp_root())
+        except Exception:
+            await cq.message.answer("SMTP — выберите действие:", reply_markup=kb_smtp_root())
         await cq.answer()
         return
 
@@ -362,7 +385,7 @@ async def smtp_nav(cq: CallbackQuery, state: FSMContext):
                     f"SMTP → {pretty} → {group} → {sub}",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:{prefix}:{group}")],
-                        [InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:back")],
+                        [InlineKeyboardButton(text="🏠 В корень SMTP", callback_data="smtp:root")],
                     ])
                 )
                 await cq.answer()
@@ -466,7 +489,7 @@ async def smtp_clear_unused(cq: CallbackQuery):
                     send_counts[int(sid)] = int(cnt)
 
         # Импорт из моделей — это именно таблица привязок
-        from common.models.smtp import SmtpBinding  # type: ignore
+        from common.models.autoswitch import SmtpBinding  # type: ignore
 
         # Получаем id привязанных
         bound_ids = set()

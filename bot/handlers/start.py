@@ -17,10 +17,8 @@ async def start(m: Message):
         reply_markup=main_menu(is_admin=is_admin),
     )
 
-@router.message(F.text == "📤 Отправить письмо")
-async def start_send_flow(m: Message):
-    await m.answer("Ок, начнём отправку. (Флоу добавим на следующем шаге)")
+# Кнопку «📤 Отправить письмо» обрабатывает flow_send (см. bot/handlers/flow_send.py)
 
-@router.message(F.text == "📋 Меню")
+@router.message(F.text.in_({"📋 Меню", "Меню"}))
 async def user_menu(m: Message):
     await m.answer("Пока тут пусто. Основные функции в «Отправить письмо» и «Админка».")

@@ -30,6 +30,7 @@ bot/keyboards/short_menu.py
 bot/keyboards/smtp_menu.py
 bot/middlewares/acl.py
 bot/middlewares/context.py
+bot/middlewares/error_report.py
 bot/services/mailer.py
 bot/services/n9_adapter.py
 bot/services/short_client.py

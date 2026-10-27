@@ -22,6 +22,16 @@ async def main():
         session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    # Кастом-эмодзи iOS-иконки: инлайн-кнопки (icon_custom_emoji_id) + текст (richify)
+    try:
+        from bot.keyboards.icons import IconRequestMiddleware, RichifyRequestMiddleware
+        if IconRequestMiddleware is not None:
+            bot.session.middleware(IconRequestMiddleware())
+        if RichifyRequestMiddleware is not None:
+            bot.session.middleware(RichifyRequestMiddleware())
+    except Exception as e:
+        logging.getLogger("bot").warning("emoji middleware not attached: %s", e)
+
     dp = build_dispatcher()
 
     # Initialize database tables once at startup

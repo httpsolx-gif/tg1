@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, Sequence
 
 from sqlmodel import Session, select, and_
 
-from common.models.short import ShortBinding
+from common.models.short import ShortBinding, ShortScope
+
+
+# Единственный поддерживаемый сокращатель на данный момент.
+DEFAULT_ADAPTER = "n9"
 
 
 # Priority (most specific → least specific):
@@ -15,14 +20,27 @@ from common.models.short import ShortBinding
 # 5) target
 # 6) global (no country, no service, no target)
 PRIORITY_MATRIX: Sequence[tuple[Optional[str], Optional[str], Optional[str]]] = (
-    # (service, country, target)
-    ("*", None, "*"),   # any explicit service + explicit target
-    ("*", None, None),  # any explicit service
-    (None, "*", "*"),   # any explicit country + explicit target
-    (None, "*", None),  # any explicit country
-    (None, None, "*"),  # any explicit target
+    # (service, country, target) — most specific → least specific.
+    # Сервис в админке выбирается внутри страны, поэтому сервис-привязка
+    # хранится вместе со страной — учитываем это при разрешении.
+    ("*", "*", "*"),    # service + country + target
+    ("*", "*", None),   # service + country
+    ("*", None, "*"),   # service + target (без страны)
+    ("*", None, None),  # service only
+    (None, "*", "*"),   # country + target
+    (None, "*", None),  # country
+    (None, None, "*"),  # target
     (None, None, None), # global
 )
+
+
+def _scope_for(service: Optional[str], country: Optional[str]) -> str:
+    """Вывести scope по заданным полям (target ортогонален и scope не меняет)."""
+    if service:
+        return ShortScope.service.value
+    if country:
+        return ShortScope.country.value
+    return ShortScope.global_.value
 
 
 def _pick(
@@ -33,34 +51,28 @@ def _pick(
     target: Optional[str],
 ) -> Optional[ShortBinding]:
     """
-    Return the first active ShortBinding that matches the provided scope
+    Return the first enabled ShortBinding that matches the provided scope
     according to PRIORITY_MATRIX. Newest binding wins within the same scope.
     """
-    # Normalize empty strings → None
     service = service or None
     country = country or None
     target = target or None
 
-    # Build concrete priority list for this lookup
-    # Replace wildcards with provided values when present, otherwise keep None
     priority_order: list[tuple[Optional[str], Optional[str], Optional[str]]] = []
     for svc_mask, ctry_mask, tgt_mask in PRIORITY_MATRIX:
         svc = service if svc_mask == "*" else (None if svc_mask is None else svc_mask)
         ctry = country if ctry_mask == "*" else (None if ctry_mask is None else ctry_mask)
         tgt = target if tgt_mask == "*" else (None if tgt_mask is None else tgt_mask)
-        # If mask asked for "*" but we don't have a concrete value (e.g. target None),
-        # this level isn't applicable.
         if (svc_mask == "*" and svc is None) or (ctry_mask == "*" and ctry is None) or (tgt_mask == "*" and tgt is None):
             continue
         priority_order.append((svc, ctry, tgt))
 
-    # Query per level until we find a match
     for svc, ctry, tgt in priority_order:
         stmt = (
             select(ShortBinding)
             .where(
                 and_(
-                    ShortBinding.is_active.is_(True),
+                    ShortBinding.enabled.is_(True),
                     ShortBinding.service.is_(svc) if svc is None else ShortBinding.service == svc,
                     ShortBinding.country.is_(ctry) if ctry is None else ShortBinding.country == ctry,
                     ShortBinding.target.is_(tgt) if tgt is None else ShortBinding.target == tgt,
@@ -81,14 +93,15 @@ def resolve_short_adapter(
     service: Optional[str] = None,
     country: Optional[str] = None,
     target: Optional[str] = None,
-    default_adapter: str = "n9",
+    default_adapter: str = DEFAULT_ADAPTER,
 ) -> str:
     """
     Decide which shortener adapter to use for given scope.
-    Returns adapter name (e.g., 'n9', 'bitly', ...). Falls back to default_adapter.
+    Пока поддерживается один адаптер (n9), поэтому возвращаем его при наличии
+    включённой привязки и как дефолт.
     """
     row = _pick(db, service=service, country=country, target=target)
-    return row.adapter if row else default_adapter
+    return default_adapter if (row and row.enabled) else default_adapter
 
 
 def get_binding(
@@ -99,7 +112,7 @@ def get_binding(
     target: Optional[str] = None,
 ) -> Optional[ShortBinding]:
     """
-    Public read helper: return the matching active ShortBinding for the given
+    Public read helper: return the matching enabled ShortBinding for the given
     scope according to PRIORITY_MATRIX (or None if not found).
     """
     return _pick(db, service=service, country=country, target=target)
@@ -108,7 +121,7 @@ def get_binding(
 def set_binding(
     db: Session,
     *,
-    adapter: str,
+    adapter: str = DEFAULT_ADAPTER,
     service: Optional[str] = None,
     country: Optional[str] = None,
     target: Optional[str] = None,
@@ -117,6 +130,7 @@ def set_binding(
     """
     Backward-compatible alias for set_short_binding so older imports
     (`from bot.services.short_policy import set_binding`) keep working.
+    `adapter` принимается для совместимости (на данный момент всегда n9).
     """
     return set_short_binding(
         db,
@@ -131,39 +145,46 @@ def set_binding(
 def set_short_binding(
     db: Session,
     *,
-    adapter: str,
+    adapter: str = DEFAULT_ADAPTER,
     service: Optional[str] = None,
     country: Optional[str] = None,
     target: Optional[str] = None,
     is_active: bool = True,
 ) -> ShortBinding:
     """
-    Upsert-like helper: deactivate previous bindings for the *exact* same scope
-    and insert a new active binding.
+    Upsert по уникальному ключу (scope, country, service, target).
+    Если строка уже есть — обновляем enabled; иначе создаём новую.
+    `adapter` на данный момент не хранится (поддерживается только n9), но
+    принимается для совместимости с вызовами из админки.
     """
-    # Deactivate previous exact-scope bindings
-    to_disable = (
-        select(ShortBinding)
-        .where(
-            and_(
-                ShortBinding.service.is_(service) if service is None else ShortBinding.service == service,
-                ShortBinding.country.is_(country) if country is None else ShortBinding.country == country,
-                ShortBinding.target.is_(target) if target is None else ShortBinding.target == target,
-                ShortBinding.is_active.is_(True),
-            )
+    service = service or None
+    country = country or None
+    target = target or None
+    scope = _scope_for(service, country)
+
+    stmt = select(ShortBinding).where(
+        and_(
+            ShortBinding.scope == scope,
+            ShortBinding.service.is_(service) if service is None else ShortBinding.service == service,
+            ShortBinding.country.is_(country) if country is None else ShortBinding.country == country,
+            ShortBinding.target.is_(target) if target is None else ShortBinding.target == target,
         )
     )
-    for row in db.exec(to_disable).all():
-        row.is_active = False
-        db.add(row)
+    existing = db.exec(stmt).first()
+    if existing:
+        existing.enabled = is_active
+        existing.updated_at = datetime.utcnow()
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return existing
 
-    # Insert new binding
     new_row = ShortBinding(
-        adapter=adapter,
+        scope=scope,
         service=service,
         country=country,
         target=target,
-        is_active=is_active,
+        enabled=is_active,
     )
     db.add(new_row)
     db.commit()
@@ -178,27 +199,23 @@ def clear_short_bindings(
 ) -> int:
     """
     Clear bindings by scope:
-      - "all": deactivate everything
-      - "unused": deactivate rows whose adapter is no longer referenced (kept simple)
-      - "service:*": deactivate all service-level bindings
-      - "country:*": deactivate all country-level bindings
-      - "target:*": deactivate all target-level bindings
+      - "all": disable everything
+      - "unused": keep only the newest per (service,country,target), disable the rest
+      - "service:*" / "country:*" / "target:*": disable that level
     Returns number of rows affected.
     """
-    filters = [ShortBinding.is_active.is_(True)]
+    filters = [ShortBinding.enabled.is_(True)]
 
     if scope == "all":
         pass
     elif scope == "unused":
-        # Basic heuristic: deactivate duplicates leaving the latest per (service,country,target)
-        sub = (
+        groups = db.exec(
             select(ShortBinding.service, ShortBinding.country, ShortBinding.target)
+            .where(ShortBinding.enabled.is_(True))
             .group_by(ShortBinding.service, ShortBinding.country, ShortBinding.target)
-        )
-        # Deactivate everything not the newest per group
-        # For simplicity, mark all active as inactive except the newest per group found below
+        ).all()
         newest_ids = set()
-        for svc, ctry, tgt in db.exec(sub).all():
+        for svc, ctry, tgt in groups:
             newest = (
                 select(ShortBinding.id)
                 .where(
@@ -206,21 +223,20 @@ def clear_short_bindings(
                         ShortBinding.service.is_(svc) if svc is None else ShortBinding.service == svc,
                         ShortBinding.country.is_(ctry) if ctry is None else ShortBinding.country == ctry,
                         ShortBinding.target.is_(tgt) if tgt is None else ShortBinding.target == tgt,
-                        ShortBinding.is_active.is_(True),
+                        ShortBinding.enabled.is_(True),
                     )
                 )
                 .order_by(ShortBinding.id.desc())
                 .limit(1)
             )
-            row_id = db.exec(newest).scalar()
+            row_id = db.exec(newest).first()
             if row_id:
                 newest_ids.add(row_id)
-        q = select(ShortBinding).where(ShortBinding.is_active.is_(True))
-        rows = db.exec(q).all()
         affected = 0
-        for r in rows:
+        for r in db.exec(select(ShortBinding).where(ShortBinding.enabled.is_(True))).all():
             if r.id not in newest_ids:
-                r.is_active = False
+                r.enabled = False
+                r.updated_at = datetime.utcnow()
                 db.add(r)
                 affected += 1
         db.commit()
@@ -232,13 +248,14 @@ def clear_short_bindings(
     elif scope.startswith("target:"):
         filters.append(ShortBinding.target.is_not(None))
     else:
-        # Unknown scope → do nothing
         return 0
 
-    q = select(ShortBinding).where(and_(*filters))
-    rows = db.exec(q).all()
+    rows = db.exec(select(ShortBinding).where(and_(*filters))).all()
+    affected = 0
     for r in rows:
-        r.is_active = False
+        r.enabled = False
+        r.updated_at = datetime.utcnow()
         db.add(r)
+        affected += 1
     db.commit()
-    return len(rows)
+    return affected

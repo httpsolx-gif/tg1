@@ -1,30 +1,134 @@
 import logging
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from common.config import settings
-from bot.keyboards.admin_menu import admin_menu
+from bot.keyboards.admin_menu import admin_menu, admin_menu_inline, ADMIN_BUTTONS
 from bot.keyboards.main_menu import main_menu
+from bot.fsm.admin import SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit, MailboxAdd, AwsAdd, SmtpLimit
 
 router = Router()
 log = logging.getLogger("bot")
 
+# Тексты кнопок нижнего меню — их нажатие в режиме ввода (SMTP/ноды) означает «выйти».
+from bot.keyboards.icons import strip_lead_emoji as _strip
+MENU_TEXTS = {"⬅️ Назад", "🛠 Админка", "📤 Отправить письмо", "📋 Меню"}
+MENU_TEXTS |= {txt for row in ADMIN_BUTTONS for txt in row}
+MENU_TEXTS |= {_strip(t) for t in set(MENU_TEXTS)}  # варианты без эмодзи (iconize reply-меню)
+
 # вход в админку (с главного меню)
-@router.message(F.text == "🛠 Админка")
+@router.message(F.text.in_({"🛠 Админка", "Админка"}))
 async def admin_entry(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         await m.answer("⛔️ Нет доступа.")
         return
-    await m.answer("Админка:", reply_markup=admin_menu())
+    # Инлайн-меню: на нём рендерятся кастом-иконки (на reply-кнопках — нет).
+    await m.answer("🛠 Админка — выберите раздел:", reply_markup=admin_menu_inline())
+
+# Если пользователь в режиме ввода SMTP жмёт нижнее меню (Назад/разделы) —
+# отменяем ввод и сбрасываем FSM, иначе нажатие «съедается» как SMTP-строка.
+@router.message(
+    StateFilter(
+        SmtpAdd.waiting_input, SmtpAutoAdd.waiting_input,
+        NodeAdd.waiting_input, NodeAdd.waiting_region, NodeEdit.region,
+        TemplateUpload.waiting, RubricAdd.name, RubricEdit.value, MailboxAdd.waiting, AwsAdd.waiting,
+        SmtpLimit.value,
+    ),
+    F.text.in_(MENU_TEXTS),
+)
+async def cancel_add_on_menu(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer("Ввод отменён.", reply_markup=admin_menu())
 
 # выход из админки назад в главное
-@router.message(F.text == "⬅️ Назад")
+@router.message(F.text.in_({"⬅️ Назад", "Назад"}))
 async def admin_back(m: Message):
     is_admin = (m.from_user.id in settings.admin_ids_set)
     await m.answer("Главное меню:", reply_markup=main_menu(is_admin=is_admin))
 
+# возврат в админку из инлайн-разделов (SHORT и т.п.) по кнопке «⬅️ Назад»
+@router.callback_query(F.data == "admin:back")
+async def admin_back_cb(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await back_to_admin(cq)
+
+
+async def back_to_admin(cq: CallbackQuery) -> None:
+    """Вернуться в корень админки (инлайн-меню с кастом-иконками), редактируя сообщение."""
+    try:
+        await cq.message.edit_text("🛠 Админка — выберите раздел:", reply_markup=admin_menu_inline())
+    except TelegramBadRequest:
+        await cq.message.answer("🛠 Админка — выберите раздел:", reply_markup=admin_menu_inline())
+    await cq.answer()
+
+
+# --- ИНЛАЙН-диспетчер разделов админки ---
+@router.callback_query(F.data.startswith("adm:"))
+async def admin_section(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    sec = cq.data.split(":", 1)[1]
+    await state.clear()
+
+    if sec == "back":
+        # из админки в главное меню (reply)
+        try:
+            await cq.message.delete()
+        except TelegramBadRequest:
+            pass
+        await cq.message.answer("Главное меню:", reply_markup=main_menu(is_admin=True))
+        await cq.answer()
+        return
+
+    # text + keyboard каждого раздела (переиспользуем сборщики клавиатур)
+    from bot.handlers.admin.smtp import kb_smtp_root
+    from bot.keyboards.short_menu import kb_short_root
+    from bot.handlers.admin.nodes import kb_nodes_root
+    from bot.handlers.admin.aws import kb_aws_root
+    from bot.handlers.admin.tpl import kb_templates_root
+    from bot.handlers.admin.rubrics import kb_srvs_root
+
+    screens = {
+        "smtp": ("SMTP — выберите действие:", kb_smtp_root),
+        "short": ("🔗 Short menu", kb_short_root),
+        "nodes": ("🖥 NODES — ноды отправки:", kb_nodes_root),
+        "templ": ("📑 TEMPLATES — шаблоны писем:", kb_templates_root),
+        "srvs": ("🧩 SRVS:", kb_srvs_root),
+    }
+    if sec in screens:
+        title, kb_fn = screens[sec]
+        try:
+            await cq.message.edit_text(title, reply_markup=kb_fn())
+        except TelegramBadRequest:
+            await cq.message.answer(title, reply_markup=kb_fn())
+        await cq.answer()
+        return
+
+    # заглушки — просто текст + кнопка назад в админку
+    stubs = {
+        "stats": "📊 STATS — общая/выборочно/user/период (подключим далее).",
+        "users": "👥 USERS — подписки/блокировки/админки (подключим далее).",
+        "api": "🛡 API — добавить/удалить/изменить токены (подключим далее).",
+        "test": "🧪 TEST — короткие проверки short/smtp/ноды (подключим далее).",
+        "alert": "🚨 ALERT — настройки тревог/уведомлений (подключим далее).",
+    }
+    text = stubs.get(sec, "Раздел не найден.")
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")]])
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except TelegramBadRequest:
+        await cq.message.answer(text, reply_markup=kb)
+    await cq.answer()
+
 # --- РАЗДЕЛЫ ---
 
-@router.message(F.text == "📧 SMTP")
+@router.message(F.text.in_({"📧 SMTP", "SMTP"}))
 async def admin_smtp(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
@@ -32,51 +136,79 @@ async def admin_smtp(m: Message):
     from bot.handlers.admin.smtp import show_smtp_root
     await show_smtp_root(m)
 
-@router.message(F.text == "🔗 SHORT")
+@router.message(F.text.in_({"🔗 SHORT", "SHORT"}))
 async def admin_short(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     from bot.keyboards.short_menu import kb_short_root
     await m.answer("🔗 Short menu", reply_markup=kb_short_root())
 
-@router.message(F.text == "🧩 SRVS")
+@router.message(F.text.in_({"🧩 SRVS", "SRVS"}))
 async def admin_srvs(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
-    from bot.handlers.admin.srvs import show_srvs_root
-    await show_srvs_root(m)
+    from bot.handlers.admin.rubrics import show_rubrics_root
+    await show_rubrics_root(m)
 
-@router.message(F.text == "📊 STATS")
+@router.message(F.text.in_({"📊 STATS", "STATS"}))
 async def admin_stats(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     from bot.handlers.admin.stats import show_stats_root
     await show_stats_root(m)
 
-@router.message(F.text == "👥 USERS")
+@router.message(F.text.in_({"👥 USERS", "USERS"}))
 async def admin_users(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     from bot.handlers.admin.users import show_users_root
     await show_users_root(m)
 
-@router.message(F.text == "🛡 API")
+@router.message(F.text.in_({"🛡 API", "API"}))
 async def admin_api(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     from bot.handlers.admin.api import show_api_root
     await show_api_root(m)
 
-@router.message(F.text == "🧪 TEST")
+@router.message(F.text.in_({"🧪 TEST", "TEST"}))
 async def admin_test(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     from bot.handlers.admin.test import show_test_root
     await show_test_root(m)
 
-@router.message(F.text == "🚨 ALERT")
+@router.message(F.text.in_({"🚨 ALERT", "ALERT"}))
 async def admin_alert(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     from bot.handlers.admin.alert import show_alert_root
     await show_alert_root(m)
+
+@router.message(F.text.in_({"🖥 NODES", "NODES"}))
+async def admin_nodes(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.nodes import show_nodes_root
+    await show_nodes_root(m)
+
+@router.message(F.text.in_({"📑 TEMPL", "TEMPL"}))
+async def admin_templates(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.tpl import show_templates_root
+    await show_templates_root(m)
+
+@router.message(F.text.in_({"📮 MAIL", "MAIL"}))
+async def admin_mailtypes(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.mailtypes import show_mailtypes_root
+    await show_mailtypes_root(m)
+
+@router.message(F.text.in_({"☁️ AWS", "AWS"}))
+async def admin_aws(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.aws import show_aws_root
+    await show_aws_root(m)

@@ -8,6 +8,7 @@ from typing import Optional, Literal, Tuple, List
 import aiosmtplib
 
 from common.config import settings
+from common.security import decrypt_password
 
 
 Mode = Literal["ssl", "starttls", "plain"]
@@ -22,8 +23,12 @@ class ProbeResult:
 
 
 def _build_test_message(sender_email: str, recipient_email: Optional[str] = None) -> EmailMessage:
-    """Compose a tiny plaintext test email."""
-    to = recipient_email or getattr(settings, "SMTP_TEST_RECIPIENT", None) or "https.olx@gmail.com"
+    """Compose a tiny plaintext test email.
+
+    По умолчанию отправляем проверочное письмо на сам аккаунт (self-test),
+    а не на сторонний адрес.
+    """
+    to = recipient_email or getattr(settings, "SMTP_TEST_RECIPIENT", None) or sender_email
     msg = EmailMessage()
     msg["From"] = sender_email
     msg["To"] = to
@@ -137,6 +142,78 @@ async def _try_send(
             pass
         # Вынесем тип ошибки и порт/режим в строку, чтобы отчёт был полезнее
         return False, f"{type(e).__name__} on {host}:{port} [{mode}] — {e}"
+
+
+async def _send_once(
+    host: str,
+    port: int,
+    login: str,
+    password: str,
+    msg: EmailMessage,
+    mode: Mode,
+    timeout: float,
+) -> Tuple[bool, Optional[str]]:
+    """Отправить готовое письмо одним режимом подключения. (ok, info|error)."""
+    ssl_ctx = ssl.create_default_context()
+    if mode == "ssl":
+        client = aiosmtplib.SMTP(hostname=host, port=port, use_tls=True, timeout=timeout, tls_context=ssl_ctx)
+    else:
+        client = aiosmtplib.SMTP(hostname=host, port=port, timeout=timeout)
+    try:
+        await client.connect()
+        if mode == "starttls":
+            await client.starttls(tls_context=ssl_ctx)
+        await client.login(login, password)
+        resp = await client.send_message(msg)
+        try:
+            await client.quit()
+        except Exception:
+            pass
+        return True, repr(resp)
+    except (aiosmtplib.SMTPException, asyncio.TimeoutError, socket.gaierror, ConnectionError, OSError) as e:
+        try:
+            if getattr(client, "is_connected", False):
+                await client.quit()
+        except Exception:
+            pass
+        return False, f"{type(e).__name__} on {host}:{port} [{mode}] — {e}"
+
+
+async def send_via_account(
+    smtp,
+    to: str,
+    subject: str,
+    html: str,
+    *,
+    sender_name: Optional[str] = None,
+    timeout: Optional[float] = None,
+    text_fallback: Optional[str] = None,
+) -> Tuple[bool, Optional[str]]:
+    """Отправить HTML-письмо через переданный SMTP-аккаунт (модель SmtpAccount).
+
+    sender_name — отображаемое имя отправителя (From: "Имя <email>").
+    Возвращает (ok, info|error). Перебирает режимы (SSL/STARTTLS/PLAIN) по порту.
+    """
+    from email.utils import formataddr
+
+    timeout = timeout if timeout is not None else float(getattr(settings, "SMTP_SEND_TIMEOUT", 20))
+    password = decrypt_password(getattr(smtp, "password_enc", "") or "")
+
+    msg = EmailMessage()
+    msg["From"] = formataddr((sender_name, smtp.email)) if sender_name else smtp.email
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(text_fallback or "Включите HTML-режим, чтобы увидеть содержимое письма.")
+    if html:
+        msg.add_alternative(html, subtype="html")
+
+    last_err: Optional[str] = None
+    for mode in _modes_to_try(smtp.port):
+        ok, info = await _send_once(smtp.host, smtp.port, smtp.login, password, msg, mode, timeout)
+        if ok:
+            return True, info
+        last_err = info
+    return False, last_err
 
 
 def _modes_to_try(port: int) -> Tuple[Mode, ...]:

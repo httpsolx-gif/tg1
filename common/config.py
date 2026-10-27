@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
     API_LOG_AUTH_TOKEN: str = "supersecret"
 
+    # Кастом-эмодзи iOS-иконки (работают только на eligible-боте: владелец Premium
+    # или Fragment-юзернейм). На неподходящем боте оставить 0 — будут юникод-эмодзи.
+    USE_CUSTOM_EMOJI: int = 1
+
     class Config:
         env_file = ".env"
         extra = "ignore"

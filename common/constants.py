@@ -201,3 +201,14 @@ COUNTRY_SERVICES = {
     "AR": [],
     # Добавляйте новые страны и правила фильтрации здесь
 }
+# --- Почтовые провайдеры (mailbox-типы) и коды для имён файлов шаблонов ---
+# Имя файла шаблона: <service>-<код>.html  (напр. olx.pl-g.html → olx.pl / gmail)
+MAILBOXES = [
+    ("m", "main"),
+    ("g", "gmail"),
+    ("h", "hotmail"),
+    ("o", "outlook"),
+    ("y", "yahoo"),
+]
+MAILBOX_NAME_BY_CODE = {code: name for code, name in MAILBOXES}
+MAILBOX_CODE_BY_NAME = {name: code for code, name in MAILBOXES}

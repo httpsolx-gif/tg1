@@ -1,123 +1,227 @@
+import logging
+
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.exceptions import TelegramBadRequest
 
+from common.config import settings
+from common.db import get_engine
+from sqlmodel import Session
+
 from bot.keyboards.short_menu import (
     kb_short_root,
-    kb_short_settings_scope,
-    kb_short_target_picker,
-    kb_short_provider_picker,
+    kb_short_targets,
+    kb_short_scope,
+    kb_short_countries,
+    kb_short_services,
+    kb_short_providers,
+    kb_short_clear,
+    kb_short_back_to,
 )
 from bot.services.short_policy import set_binding as set_short_binding
 
+try:
+    from bot.services.short_policy import clear_short_bindings  # type: ignore
+except Exception:  # pragma: no cover
+    clear_short_bindings = None  # type: ignore
+
 router = Router(name="short-admin")
+log = logging.getLogger("bot")
+_engine = get_engine()
+
+
+def _is_admin(cq: CallbackQuery) -> bool:
+    return cq.from_user.id in settings.admin_ids_set
+
+
+async def _edit(cq: CallbackQuery, text: str, markup) -> None:
+    """Безопасно перерисовать текущее сообщение."""
+    try:
+        await cq.message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest:
+        # сообщение не изменилось / устарело — просто подтверждаем
+        pass
+    await cq.answer()
 
 
 # --- Корень SHORT ---
 @router.callback_query(F.data == "short:root")
-async def show_short_root(call: CallbackQuery):
-    try:
-        await call.message.edit_text("🔗 Short menu", reply_markup=kb_short_root())
-    except TelegramBadRequest:
-        await call.answer()
-
-
-
-# --- SETTINGS ROOT (выбор TARGET сперва: gmail/main) ---
-@router.callback_query(F.data == "short:settings")
-async def show_short_settings_target(call: CallbackQuery):
-    try:
-        # сначала даем выбрать target (gmail/main). scope выберем на следующем шаге
-        await call.message.edit_text(
-            "⚙️ Settings – choose target",
-            reply_markup=kb_short_target_picker(None),  # кнопки с payload только target
-        )
-    except TelegramBadRequest:
-        await call.answer()
-
-
-# --- TARGET PICKER ---
-@router.callback_query(F.data.startswith("short:settings:scope:"))
-async def show_short_targets(call: CallbackQuery):
-    scope = call.data.split(":")[-1]
-    try:
-        await call.message.edit_text(
-            f"🎯 Choose target (scope={scope})",
-            reply_markup=kb_short_target_picker(scope),
-        )
-    except TelegramBadRequest:
-        await call.answer()
-
-
-# --- PROVIDER PICKER ---
-@router.callback_query(F.data.startswith("short:settings:target:"))
-async def show_short_providers(call: CallbackQuery):
-    _, _, _, payload = call.data.split(":", 3)
-    parts = payload.split("|")
-    # Если пришёл только target без scope — покажем выбор scope, чтобы не зависать с ошибкой
-    if len(parts) < 2 or not parts[1]:
-        try:
-            await call.message.edit_text(
-                "🌍 Choose scope",
-                reply_markup=kb_short_settings_scope(),
-            )
-        except TelegramBadRequest:
-            await call.answer()
+async def show_short_root(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
         return
-    target, scope = parts[0], parts[1]
-    country = parts[2] if len(parts) > 2 and parts[2] else None
-    service = parts[3] if len(parts) > 3 and parts[3] else None
+    await _edit(cq, "🔗 Short menu", kb_short_root())
 
+
+# «Назад» внутри раздела Short → корень раздела
+@router.callback_query(F.data == "short:back")
+async def short_back_to_root(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await _edit(cq, "🔗 Short menu", kb_short_root())
+
+
+# --- SETTINGS L1: выбор таргета ---
+@router.callback_query(F.data == "short:settings")
+async def show_short_targets(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await _edit(cq, "⚙️ Settings — выберите таргет:", kb_short_targets())
+
+
+# --- SETTINGS L2: выбор области (global/countries) ---
+@router.callback_query(F.data.startswith("short:t:"))
+async def show_short_scope(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    target = cq.data.split(":", 2)[2]
+    await _edit(cq, f"🎯 {target} — выберите область:", kb_short_scope(target))
+
+
+# --- SETTINGS L3: global → провайдеры, countries → список стран ---
+@router.callback_query(F.data.startswith("short:sc:"))
+async def show_short_scope_branch(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     try:
-        await call.message.edit_text(
-            f"🔗 Choose provider (target={target}, scope={scope})",
-            reply_markup=kb_short_provider_picker(scope=scope, target=target, country=country, service=service),
+        _, _, target, scope = cq.data.split(":", 3)
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+
+    if scope == "global":
+        await _edit(
+            cq,
+            f"🔗 {target} → Global — выберите сокращалку:",
+            kb_short_providers(target, "global"),
         )
-    except TelegramBadRequest:
-        await call.answer()
+    elif scope == "countries":
+        await _edit(cq, f"🗺 {target} → выберите страну:", kb_short_countries(target))
+    else:
+        await cq.answer("Неизвестная область", show_alert=True)
 
 
-# --- ВЫБОР ПРОВАЙДЕРА ---
-@router.callback_query(F.data.startswith("short:settings:provider:"))
-async def apply_short_provider(call: CallbackQuery):
-    # expected payload: "short:settings:provider:{provider}|{target}|{scope}|{country?}|{service?}"
+# --- SETTINGS L3b: услуги выбранной страны ---
+@router.callback_query(F.data.startswith("short:c:"))
+async def show_short_services(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
     try:
-        _, _, _, payload = call.data.split(":", 3)
-        parts = payload.split("|")
-        provider = parts[0] if len(parts) > 0 else None
-        target   = parts[1] if len(parts) > 1 else None
-        scope    = parts[2] if len(parts) > 2 else None
-        country  = parts[3] if len(parts) > 3 and parts[3] else None
-        service  = parts[4] if len(parts) > 4 and parts[4] else None
+        _, _, target, code = cq.data.split(":", 3)
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    await _edit(cq, f"🗺 {target} → {code} — выберите сервис:", kb_short_services(target, code))
 
-        if not (provider and target and scope):
-            await call.answer("Некорректные данные кнопки", show_alert=True)
-            return
 
-        # persist choice
-        await set_short_binding(scope=scope, target=target, provider=provider, country=country, service=service)
+# --- SETTINGS L4: провайдеры для сервиса ---
+@router.callback_query(F.data.startswith("short:sv:"))
+async def show_short_service_providers(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    try:
+        _, _, target, code, service = cq.data.split(":", 4)
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+    await _edit(
+        cq,
+        f"🔗 {target} → {code} → {service} — выберите сокращалку:",
+        kb_short_providers(target, "service", country=code, service=service),
+    )
 
-        # confirm and show root again
-        summary = [
-            "✅ Сокращалка выбрана:",
-            f"• Provider: <b>{provider}</b>",
-            f"• Target: <b>{target}</b>",
-            f"• Scope: <b>{scope}</b>",
-        ]
-        if country:
-            summary.append(f"• Country: <b>{country}</b>")
-        if service:
-            summary.append(f"• Service: <b>{service}</b>")
 
-        try:
-            await call.message.edit_text("\n".join(summary), reply_markup=kb_short_root(), parse_mode="HTML")
-        except TelegramBadRequest:
-            await call.message.answer("\n".join(summary), reply_markup=kb_short_root(), parse_mode="HTML")
+# --- Применение выбора провайдера ---
+@router.callback_query(F.data.startswith("short:p:"))
+async def apply_short_provider(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    # short:p:{target}:{scope}:{country}:{service}:{provider}
+    try:
+        _, _, target, scope, country, service, provider = cq.data.split(":", 6)
+    except ValueError:
+        await cq.answer("Неверные данные", show_alert=True)
+        return
+
+    country_val = None if country in ("", "-") else country
+    service_val = None if service in ("", "-") else service
+
+    try:
+        with Session(_engine) as db:
+            set_short_binding(
+                db,
+                adapter=provider,
+                service=service_val,
+                country=country_val,
+                target=target,
+            )
+    except Exception as e:  # не роняем UI
+        log.warning("SHORT set_binding failed: %s", e)
+        await cq.answer(f"Ошибка: {e}", show_alert=True)
+        return
+
+    summary = ["✅ Сокращалка закреплена:", f"• Provider: <b>{provider}</b>", f"• Target: <b>{target}</b>", f"• Scope: <b>{scope}</b>"]
+    if country_val:
+        summary.append(f"• Country: <b>{country_val}</b>")
+    if service_val:
+        summary.append(f"• Service: <b>{service_val}</b>")
+    try:
+        await cq.message.edit_text("\n".join(summary), reply_markup=kb_short_root())
     except TelegramBadRequest:
-        await call.answer()
-    except Exception as e:
-        # bubble error to UI to understand what's wrong
+        await cq.message.answer("\n".join(summary), reply_markup=kb_short_root())
+    await cq.answer("Закреплено")
+
+
+# --- CLEAR ---
+@router.callback_query(F.data == "short:clear")
+async def show_short_clear(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await _edit(cq, "🧹 Short → Очистка:", kb_short_clear())
+
+
+@router.callback_query(F.data == "short:clear:pick")
+async def short_clear_pick(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await _edit(
+        cq,
+        "🗑 Short → Очистка → Выборочно\n\nФункция в разработке.",
+        kb_short_back_to("short:clear"),
+    )
+
+
+@router.callback_query(F.data == "short:clear:unused")
+async def short_clear_unused(cq: CallbackQuery):
+    if not _is_admin(cq):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    removed = 0
+    if clear_short_bindings is not None:
         try:
-            await call.answer(f"Ошибка: {e}", show_alert=True)
-        except TelegramBadRequest:
-            pass
+            with Session(_engine) as db:
+                removed = clear_short_bindings(db, scope="unused")
+        except Exception as e:
+            log.warning("SHORT clear unused failed: %s", e)
+            await cq.answer(f"Ошибка: {e}", show_alert=True)
+            return
+    await _edit(
+        cq,
+        f"🧹 Short → Очистка → Неиспользуемые\n\nДеактивировано: <b>{removed}</b>",
+        kb_short_back_to("short:clear"),
+    )
+
+
+# «пустышка» для неактивных кнопок (например, «нет сервисов»)
+@router.callback_query(F.data == "short:noop")
+async def short_noop(cq: CallbackQuery):
+    await cq.answer()

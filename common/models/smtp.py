@@ -13,3 +13,5 @@ class SmtpAccount(SQLModel, table=True):
     pool: str = "manual"  # manual | auto
     is_active: bool = True
     error_count: int = 0
+    send_limit: int = 0   # 0 = без лимита
+    sent_count: int = 0   # сколько успешных отправок сделано

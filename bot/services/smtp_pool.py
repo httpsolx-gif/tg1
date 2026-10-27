@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from typing import Optional, Literal, Tuple, List
 from sqlmodel import select, Session
+from sqlalchemy import or_
 
 from common.db import engine as _engine
 from common.models.smtp import SmtpAccount
+
+
+def _exhausted(smtp: SmtpAccount) -> bool:
+    """Исчерпан ли лимит отправок (0 = без лимита)."""
+    lim = getattr(smtp, "send_limit", 0) or 0
+    return lim > 0 and getattr(smtp, "sent_count", 0) >= lim
 
 # Попробуем подтянуть модели для привязок/автосмены, если они уже есть в проекте
 try:  # ожидаем, что тут будет храниться фиксация выбранного SMTP
@@ -15,6 +22,11 @@ except Exception:  # модель ещё не создана — работае�
 # Типы областей и групп
 Scope = Literal["global", "country", "service"]
 Group = Literal["gmail", "main"]
+
+# Канонический список SMTP-групп (единственные валидные значения smtp_group).
+# Используется и в SMTP-настройках, и в выборе группы у рубрики.
+SMTP_GROUPS: tuple[str, ...] = ("gmail", "main")
+SMTP_GROUP_LABELS: dict[str, str] = {"gmail": "📮 Gmail", "main": "📦 Main"}
 
 
 # =============================
@@ -52,7 +64,7 @@ async def set_binding(
             (SmtpBinding.group == group) & (SmtpBinding.scope == scope)
         )
         if scope == "country":
-            stmt = stmt.where(SmtpBinding.country_code == country_code)
+            stmt = stmt.where(SmtpBinding.country == country_code)
         elif scope == "service":
             stmt = stmt.where(SmtpBinding.service_id == service_id)
 
@@ -64,7 +76,7 @@ async def set_binding(
                 group=group,
                 scope=scope,
                 smtp_id=smtp_id,
-                country_code=country_code,
+                country=country_code,
                 service_id=service_id,
             )
             db.add(row)
@@ -89,7 +101,7 @@ async def get_binding(
             (SmtpBinding.group == group) & (SmtpBinding.scope == scope)
         )
         if scope == "country":
-            stmt = stmt.where(SmtpBinding.country_code == country_code)
+            stmt = stmt.where(SmtpBinding.country == country_code)
         elif scope == "service":
             stmt = stmt.where(SmtpBinding.service_id == service_id)
         val = db.exec(stmt).first()
@@ -100,24 +112,25 @@ async def pick_smtp(
     *,
     group: Group,
     country_code: Optional[str] = None,
-    service_id: Optional[int] = None,
+    service: Optional[str] = None,
 ) -> Optional[SmtpAccount]:
     """
     Вернуть SMTP для отправки по приоритету привязок:
       1) service → 2) country → 3) global → 4) первый активный из группы (fallback)
 
-    Здесь **не** реализуем лимиты/автосмену — это следующий шаг, когда пришлёшь autoswitch-модель.
+    Привязки хранятся админкой с составным scope ("country:PL", "service:PL:olx.pl",
+    "global"); читаем их тем же ключом, иначе закреплённый SMTP не найдётся.
     """
-    # 1. service
-    if service_id is not None:
-        sid = await get_binding(group=group, scope="service", service_id=service_id)
+    # 1. service (нужны и страна, и имя сервиса)
+    if country_code and service:
+        sid = await get_binding(group=group, scope=f"service:{country_code}:{service}")
         smtp = _load_active(sid)
         if smtp is not None:
             return smtp
 
     # 2. country
     if country_code:
-        sid = await get_binding(group=group, scope="country", country_code=country_code)
+        sid = await get_binding(group=group, scope=f"country:{country_code}")
         smtp = _load_active(sid)
         if smtp is not None:
             return smtp
@@ -128,12 +141,16 @@ async def pick_smtp(
     if smtp is not None:
         return smtp
 
-    # 4. fallback — первый активный из данной группы (чтобы не падать без причины)
+    # 4. fallback — первый активный и НЕ исчерпанный из данной группы (автосмена)
     with Session(_engine) as db:
         row = db.exec(
             select(SmtpAccount)
-            .where((SmtpAccount.kind == group) & (SmtpAccount.is_active == True))  # noqa: E712
-            .order_by(SmtpAccount.last_used_at, SmtpAccount.id)
+            .where(
+                (SmtpAccount.kind == group)
+                & (SmtpAccount.is_active == True)  # noqa: E712
+                & or_(SmtpAccount.send_limit == 0, SmtpAccount.sent_count < SmtpAccount.send_limit)
+            )
+            .order_by(SmtpAccount.sent_count, SmtpAccount.error_count, SmtpAccount.id)
         ).first()
         return row
 
@@ -156,6 +173,7 @@ def _load_active(smtp_id: Optional[int]) -> Optional[SmtpAccount]:
         return None
     with Session(_engine) as db:
         smtp = db.get(SmtpAccount, int(smtp_id))
-        if smtp and smtp.is_active:
+        # исчерпанный лимит → считаем недоступным, чтобы сработала автосмена
+        if smtp and smtp.is_active and not _exhausted(smtp):
             return smtp
         return None
