@@ -32,10 +32,10 @@ class SendIn(BaseModel):
     service: str
     email: str
     link: str
-    price: Optional[str] = None          # → *PRICE* в шаблоне
-    predmetname: Optional[str] = None    # → *PNAME* в шаблоне
-    id: Optional[str] = None             # клиентский id — только в лог
-    username: Optional[str] = None       # клиентский username — только в лог
+    id: Optional[str] = None             # Telegram userid (обязателен) — в лог/учёт
+    username: Optional[str] = None       # Telegram @username (обязателен) — в лог/учёт
+    price: Optional[str] = None          # цена товара без валюты → *PRICE*
+    predmetname: Optional[str] = None    # название товара → *PNAME*
 
 
 def _catalog() -> dict:
@@ -75,6 +75,14 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     if is_paused():
         raise HTTPException(503, "service under maintenance")
 
+    # Telegram-идентификация обязательна (учёт): id (userid, число) + @username
+    tg_id = str(body.id or "").strip()
+    uname = str(body.username or "").strip().lstrip("@")
+    if not tg_id or not uname:
+        raise HTTPException(422, "telegram id and username are required")
+    if not tg_id.isdigit():
+        raise HTTPException(422, "id must be telegram user id (numeric)")
+
     cat = _catalog()
     # страна/сервис — только из каталога и из разрешённых токену
     if body.country not in cat:
@@ -83,9 +91,11 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
         raise HTTPException(422, "unknown service for country")
     if not T.allows_service(tok, body.service):
         raise HTTPException(403, "service not allowed for token")
-    # email
+    # email: проверяем формат, затем исправляем очевидную опечатку домена
     if not _EMAIL_RE.match((body.email or "").strip()):
         raise HTTPException(422, "bad email")
+    from bot.services.emailfix import fix_email
+    email = fix_email(body.email.strip())
     # ссылка: только http(s) + домен из разрешённых токену
     link = (body.link or "").strip()
     mo = _LINK_RE.match(link)
@@ -97,7 +107,7 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
 
     # адрес в стоп-листе (отписка/жалоба) → отдельная ошибка 409, не общий 422
     from bot.services.suppression import is_suppressed
-    if is_suppressed(body.email.strip()):
+    if is_suppressed(email):
         raise HTTPException(409, "recipient is suppressed")
 
     # собрать payload (рубрика по домену получателя; клиент контент не задаёт)
@@ -110,7 +120,7 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     try:
         payload = build_payload(
             country=body.country, service=body.service,
-            email=body.email.strip(), link=link,
+            email=email, link=link,
             sender_class="white", extra=extra or None,
         )
     except SendError as e:
@@ -121,7 +131,7 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     from bot.services.api_flags import is_dedup, DEDUP_HOURS
     if is_dedup():
         from bot.services.send_core import sent_recently
-        if sent_recently(body.email.strip(), DEDUP_HOURS):
+        if sent_recently(email, DEDUP_HOURS):
             return {"status": "duplicate", "id": None}
 
     # рейт + суточная квота (после валидации, до постановки в очередь)
@@ -133,7 +143,7 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     job_id = "snd_" + secrets.token_hex(5)
     ok = await worker.enqueue({
         "job_id": job_id, "payload": payload, "token_id": tok.id,
-        "ext_id": body.id, "ext_username": body.username,
+        "ext_id": tg_id, "ext_username": uname,
     })
     if not ok:
         T.consume_quota(tok.id, -1)  # вернуть квоту — в очередь не попало

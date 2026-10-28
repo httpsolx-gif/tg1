@@ -232,6 +232,56 @@ COUNTRY_TZ = {
     "AU": "Australia/Sydney",
 }
 
+# --- Suppression: категории, на которые НЕ слать всегда (п.50) ---
+# Роль-адреса (на ЛЮБОМ домене): почтить abuse@/postmaster@/spamtrap@ = репортят
+# отправителя в блеклисты. Сверяется local-part письма.
+SUPPRESS_ROLES = {
+    "abuse", "postmaster", "hostmaster", "webmaster", "mailer-daemon", "noc",
+    "security", "complaints", "complaint", "spam", "spamtrap", "spam-trap",
+    "antispam", "anti-spam", "nospam", "no-spam", "uce", "fraud", "phishing",
+    "phish", "dmarc", "dkim", "blackhole", "devnull", "bounce", "bounces",
+}
+# Домены (и их ПОДДОМЕНЫ) площадок/мониторинга/ловушек. Пополняется в боте
+# (🛡 API → Suppression, можно добавить `@domain`). Пример: kleinanzeigen.de ловит
+# и mail.kleinanzeigen.de.
+SUPPRESS_DOMAINS = {
+    # Площадки-компании (внутренние/мониторинговые адреса)
+    "kleinanzeigen.de", "kleinanzeigen.com", "ebay-kleinanzeigen.de",
+    # Антиспам-организации и известные ловушки
+    "spamhaus.org", "spamcop.net", "uceprotect.net", "abuse.net",
+    "barracudacentral.org", "spam.la", "spamtrap.com", "projecthoneypot.org",
+    "mailabuse.org", "cloudmark.com",
+}
+
+# --- Автоисправление опечаток домена получателя (п.51) ---
+# Набор КРУПНЫХ потребительских провайдеров — цель фуззи-исправления (расстояние ≤1
+# с учётом перестановки соседних букв). Опечатка вроде wrb.de→web.de, gamil.com→gmail.com.
+CANONICAL_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com",
+    "yahoo.com", "yahoo.de", "yahoo.co.uk", "yahoo.fr",
+    "hotmail.com", "hotmail.de", "hotmail.co.uk", "hotmail.fr",
+    "outlook.com", "outlook.de", "live.com", "live.de", "msn.com",
+    "web.de", "gmx.de", "gmx.net", "gmx.com", "t-online.de",
+    "aol.com", "icloud.com", "me.com",
+    "mail.ru", "yandex.ru",
+    "wp.pl", "o2.pl", "interia.pl", "onet.pl", "op.pl",
+    "seznam.cz", "free.fr", "orange.fr", "laposte.net",
+    "proton.me", "protonmail.com",
+}
+# Явные опечатки (в т.ч. с расстоянием >1) → корректный домен. Имеют приоритет над фуззи.
+TYPO_DOMAIN_MAP = {
+    "gamil.com": "gmail.com", "gmial.com": "gmail.com", "gmil.com": "gmail.com",
+    "gmai.com": "gmail.com", "gmaill.com": "gmail.com", "gnail.com": "gmail.com",
+    "gmail.con": "gmail.com", "gmail.co": "gmail.com", "gmail.cm": "gmail.com",
+    "gmail.om": "gmail.com", "gmail.ocm": "gmail.com", "ggmail.com": "gmail.com",
+    "hotmial.com": "hotmail.com", "hotmal.com": "hotmail.com", "hotmai.com": "hotmail.com",
+    "hotmil.com": "hotmail.com", "hotmail.con": "hotmail.com",
+    "outlok.com": "outlook.com", "outllok.com": "outlook.com", "outlook.con": "outlook.com",
+    "yaho.com": "yahoo.com", "yahooo.com": "yahoo.com", "yhoo.com": "yahoo.com",
+    "wrb.de": "web.de", "wen.de": "web.de", "web.d": "web.de",
+    "gmx.ne": "gmx.net", "t-onlie.de": "t-online.de",
+}
+
 # --- Почтовые провайдеры (mailbox-типы) и коды для имён файлов шаблонов ---
 # Имя файла шаблона: <service>-<код>.html  (напр. olx.pl-g.html → olx.pl / gmail)
 MAILBOXES = [

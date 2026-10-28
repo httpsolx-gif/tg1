@@ -452,14 +452,20 @@ def _kb_supp() -> InlineKeyboardMarkup:
 
 async def _show_supp(target, *, edit: bool):
     from bot.services import suppression as SUP
+    from common.constants import SUPPRESS_ROLES, SUPPRESS_DOMAINS
     rows = SUP.list_all(limit=30)
     total = SUP.count()
     body = "\n".join(f"• <code>{_esc(r.email)}</code>"
                      + (f" <i>({_esc(r.reason)})</i>" if r.reason else "") for r in rows) or "<i>пусто</i>"
     text = (
-        f"🚫 <b>Suppression-лист</b> ({total}) — адреса, на которые НЕ слать "
-        "(отписки/жалобы/баунсы). Проверяется и в боте, и в API.\n\n"
-        f"{body}" + ("\n\n<i>показаны последние 30</i>" if total > 30 else "")
+        f"🚫 <b>Suppression-лист</b> — кому НЕ слать (бот и API). Три уровня:\n"
+        f"• <b>Роль-адреса</b> ({len(SUPPRESS_ROLES)}, встроенные): "
+        "<code>abuse@/postmaster@/spamtrap@…</code> на любом домене.\n"
+        f"• <b>Домены</b> ({len(SUPPRESS_DOMAINS)} встроенных + ниже): площадки/ловушки "
+        "вместе с поддоменами (<code>kleinanzeigen.de</code> ловит и <code>mail.kleinanzeigen.de</code>).\n"
+        f"• <b>Точные адреса</b> — ваш список.\n\n"
+        f"<b>Свои записи ({total}):</b>\n{body}"
+        + ("\n\n<i>показаны последние 30</i>" if total > 30 else "")
     )
     if edit:
         try:
@@ -489,8 +495,10 @@ async def api_supp_io(cq: CallbackQuery, state: FSMContext):
     await state.set_state(ApiTokenFlow.supp)
     await state.update_data(supp_mode=mode)
     verb = "добавить в" if mode == "add" else "убрать из"
-    await cq.message.answer(f"Пришлите e-mail(ы), чтобы {verb} suppression-лист "
-                            "(можно пачкой через пробел/запятую/перенос):")
+    hint = ("Можно e-mail или <b>@домен</b> / голый домен (блок домена и поддоменов). "
+            "Пачкой через пробел/запятую/перенос." if mode == "add"
+            else "Можно пачкой через пробел/запятую/перенос.")
+    await cq.message.answer(f"Пришлите адрес(а)/домены, чтобы {verb} suppression-лист.\n{hint}")
     await cq.answer()
 
 

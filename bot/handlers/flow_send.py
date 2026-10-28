@@ -207,7 +207,12 @@ async def take_email(m: Message, state: FSMContext):
         return
     pv = payload["_preview"]
     rub_label = "Рубрика (black-отправитель)" if cls == "black" else "Рубрика по домену"
+    fix_line = ""
+    if pv.get("email_fixed"):
+        o, f = pv["email_fixed"]
+        fix_line = f"✏️ Адрес исправлен: <code>{o}</code> → <b>{f}</b>\n"
     await m.answer(
+        f"{fix_line}"
         f"{rub_label}: <b>{pv['rub_name']}</b> · почта <b>{payload['mailbox']}</b>{pv['ovr']}\n"
         f"• Шаблон: {pv['tpl_label']}\n"
         f"• Тайтл: {pv['title_disp']}\n"

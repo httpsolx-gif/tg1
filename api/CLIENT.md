@@ -47,10 +47,10 @@ Content-Type: application/json
 | `service`     | да  | Сервис из каталога этой страны (напр. `myemail.pl`) |
 | `email`       | да  | E-mail получателя |
 | `link`        | да  | Ссылка (`http(s)://…`) — подставляется в кнопку письма |
-| `price`       | нет | Цена — подставляется в шаблон вместо `*PRICE*` |
-| `predmetname` | нет | Название предмета — вместо `*PNAME*` |
-| `id`          | нет | Ваш идентификатор (только для учёта, в письмо не попадает) |
-| `username`    | нет | Имя пользователя (только для учёта) |
+| `id`          | да  | Telegram **userid** (число) — для учёта, в письмо не идёт |
+| `username`    | да  | Telegram **@username** — для учёта, в письмо не идёт |
+| `price`       | нет | Цена товара **без валюты** (напр. `199`) → `*PRICE*` |
+| `predmetname` | нет | Название товара → `*PNAME*` |
 
 Пример:
 ```bash
@@ -62,10 +62,10 @@ curl -X POST https://<ваш-хост>/api/v1/send \
     "service": "myemail.pl",
     "email": "user@example.com",
     "link": "https://target.example/offer",
-    "price": "199 zł",
-    "predmetname": "iPhone 15",
-    "id": "777",
-    "username": "kesha"
+    "id": "123456789",
+    "username": "@kesha",
+    "price": "199",
+    "predmetname": "iPhone 15"
   }'
 ```
 
@@ -76,6 +76,7 @@ curl -X POST https://<ваш-хост>/api/v1/send \
 
 > Дату в письмо (`*DATE*`) подставляем сами — в часовом поясе страны получателя.
 > Тему, оформление, отправителя и способ доставки вы не задаёте.
+> Очевидные опечатки домена исправляются автоматически (`gamil.com` → `gmail.com`).
 
 ---
 

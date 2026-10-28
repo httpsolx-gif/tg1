@@ -138,6 +138,11 @@ def build_payload(
     from bot.services.mailboxes import mailbox_for_email
     from bot.services.scope import scope_short_choice
     from bot.services.suppression import is_suppressed
+    from bot.services.emailfix import fix_email
+
+    # авто-исправление очевидных опечаток домена (wrb.de→web.de, gamil.com→gmail.com)
+    orig_email = email
+    email = fix_email(email)
 
     # suppression-лист: на отписки/жалобы/баунсы не слать (бережём репутацию)
     if is_suppressed(email):
@@ -198,6 +203,7 @@ def build_payload(
             "ovr": " 🔧" if cfg else "",
             "title_disp": cfg.get("title") or rub.get("title") or "—",
             "sender_disp": cfg.get("sender_name") or rub.get("sender_name") or "—",
+            "email_fixed": (orig_email, email) if email != orig_email else None,
         },
     }
 

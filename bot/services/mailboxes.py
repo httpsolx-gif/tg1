@@ -80,9 +80,18 @@ def mailbox_for_email(email: str, default: str = "main") -> str:
     if not dom:
         return default
     from common.domains import domain_in
-    for m in all_mailboxes():
+    boxes = all_mailboxes()
+    for m in boxes:
         if domain_in(dom, m.domains or ""):
             return m.name
+    # корп/кастомный домен — определить провайдера по MX и привязать к типу почты
+    try:
+        from bot.services.mxlookup import mailbox_for_domain
+        mb = mailbox_for_domain(dom)
+        if mb and mb in {m.name for m in boxes}:
+            return mb
+    except Exception:
+        pass
     return default
 
 

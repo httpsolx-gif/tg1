@@ -54,9 +54,11 @@ def rubric_for_email(email: str) -> dict | None:
         return None
     from common.domains import domain_in
     other = None
+    by_name: dict[str, Rubric] = {}
     with Session(_engine) as db:
         for r in db.exec(select(Rubric).order_by(Rubric.id)).all():
             nm = (r.name or "").strip().lower()
+            by_name.setdefault(nm, r)
             if nm == BLACK_RUBRIC:
                 continue  # black — только по классу отправителя, не по домену получателя
             if nm == OTHER_RUBRIC:
@@ -64,6 +66,14 @@ def rubric_for_email(email: str) -> dict | None:
             mbs = db.exec(select(RubricMailbox.mailbox).where(RubricMailbox.rubric_id == r.id)).all()
             if domain_in(dom, " ".join(mbs)):
                 return _rubric_dict(r)
+        # корп/кастомный домен — по MX определить реального провайдера и его рубрику
+        try:
+            from bot.services.mxlookup import rubric_name_for_domain
+            rn = rubric_name_for_domain(dom)
+            if rn and rn in by_name and rn not in (BLACK_RUBRIC,):
+                return _rubric_dict(by_name[rn])
+        except Exception:
+            pass
         return _rubric_dict(other) if other else None
 
 
