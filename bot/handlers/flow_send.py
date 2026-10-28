@@ -113,6 +113,8 @@ def _kb_result() -> InlineKeyboardMarkup:
 @router.message(Command("send"))
 @router.message(F.text.func(lambda t: isinstance(t, str) and _strip(t) == "Отправить письмо"))
 async def start_send(m: Message, state: FSMContext):
+    from bot.services.access import remember_user
+    remember_user(m.from_user.id, m.from_user.username)
     if _sender_class(m.from_user) == "ban":
         await m.answer("🚫 Доступ к отправке заблокирован.")
         return
@@ -123,6 +125,8 @@ async def start_send(m: Message, state: FSMContext):
 
 @router.callback_query(F.data == "send:new")
 async def send_new(cq: CallbackQuery, state: FSMContext):
+    from bot.services.access import remember_user
+    remember_user(cq.from_user.id, cq.from_user.username)
     if _sender_class(cq.from_user) == "ban":
         await cq.answer("🚫 Доступ к отправке заблокирован.", show_alert=True)
         return
@@ -221,7 +225,9 @@ async def take_email(m: Message, state: FSMContext):
     if not email or "@" not in email:
         await m.answer("❗️ Неверный e-mail.", reply_markup=_kb_cancel())
         return
-    # классификация отправителя: ban → блок; black → отдельный профиль; white → обычный путь
+    # классификация отправителя: ban → блок; black → рубрика «black»; white → обычный путь
+    from bot.services.access import remember_user
+    remember_user(m.from_user.id, m.from_user.username)
     cls = _sender_class(m.from_user)
     if cls == "ban":
         await state.clear()

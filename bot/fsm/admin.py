@@ -81,3 +81,9 @@ class ShortDomainAdd(StatesGroup):
 class AccessAdd(StatesGroup):
     """Добавление в список доступа (ban/white/black): ждём id/@username (пачкой). data: lst."""
     waiting = State()
+
+
+class UserFlow(StatesGroup):
+    """USERS: ввод id/@username для действия (ban/white/black/unban; data: mode) и для поиска карточки."""
+    act = State()
+    search = State()

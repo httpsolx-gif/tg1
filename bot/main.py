@@ -70,7 +70,8 @@ async def main():
         engine = get_engine()
         # регистрируем модели, создаваемые через create_all (не в alembic)
         import common.models.short_domain  # noqa: F401
-        import common.models.access  # noqa: F401  (AccessEntry)
+        import common.models.access  # noqa: F401  (AccessEntry, SeenUser)
+        import common.models.appstate  # noqa: F401  (AppState — курсор выгрузки /sends)
         SQLModel.metadata.create_all(engine)
         _ensure_columns(engine)
     except Exception as e:

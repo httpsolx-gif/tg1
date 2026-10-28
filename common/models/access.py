@@ -23,3 +23,17 @@ class AccessEntry(SQLModel, table=True):
     value: str = Field(index=True)  # '123456789' (id) | 'username' (lower, без @)
     is_id: bool = False             # True = числовой id, False = username
     note: str | None = None
+
+
+class SeenUser(SQLModel, table=True):
+    """Виденные отправители: id → @username (для поиска/карточки в USERS).
+
+    Пишется при каждой отправке (bot/services/access.remember_user). username —
+    для НОВЫХ отправок; по старым (до появления таблицы) остаётся None.
+    """
+    __tablename__ = "seen_user"
+
+    user_id: int = Field(primary_key=True)   # Telegram id
+    username: str | None = Field(default=None, index=True)  # без @, lower
+    first_seen: str | None = None
+    last_seen: str | None = None

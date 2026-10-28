@@ -10,7 +10,7 @@ from bot.keyboards.main_menu import main_menu
 from bot.fsm.admin import (
     SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit,
     RubricMailboxAdd, MailboxAdd, MailboxDomains, ScopeInput, SmtpLimit,
-    ServiceCfgEdit, ShortDomainAdd, AccessAdd,
+    ServiceCfgEdit, ShortDomainAdd, AccessAdd, UserFlow,
 )
 
 router = Router()
@@ -43,7 +43,7 @@ async def admin_entry(m: Message):
         SmtpLimit.value,
         ShortDomainAdd.domain, ShortDomainAdd.token, ShortDomainAdd.email,
         ShortDomainAdd.registrar, ShortDomainAdd.node,
-        AccessAdd.waiting,
+        AccessAdd.waiting, UserFlow.act, UserFlow.search,
     ),
     F.text.func(lambda t: isinstance(t, str) and _strip(t) in MENU_TEXTS),
 )
