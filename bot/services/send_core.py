@@ -216,6 +216,7 @@ async def send_payload(
     api_token_id: Optional[int] = None,
     ext_id: Optional[str] = None,
     ext_username: Optional[str] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Выполнить отправку по payload. Пишет SendLog. Возвращает
     {ok, info, short, from_disp, via}. Исключений наружу не бросает (ошибки транспорта
@@ -294,6 +295,7 @@ async def send_payload(
                 country=payload.get("country"), service=payload.get("service"),
                 mailbox=payload.get("mailbox"), short_provider=provider, track=track,
                 api_token_id=api_token_id, ext_id=ext_id, ext_username=ext_username,
+                job_id=job_id,
             ))
             db.commit()
     except Exception as e:

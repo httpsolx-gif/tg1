@@ -20,6 +20,7 @@ from bot.handlers.admin.sends import router as sends_router
 from bot.handlers.admin.api import router as api_router
 from bot.handlers.admin.mailtypes import router as mailtypes_router
 from bot.handlers.admin.smtp_limits import router as smtp_limits_router
+from bot.handlers.admin.spamcheck import router as spamcheck_router
 from bot.middlewares.error_report import ErrorReportMiddleware
 
 configure_logging(settings.BOT_TOKEN)
@@ -47,4 +48,5 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(api_router)
     dp.include_router(mailtypes_router)
     dp.include_router(smtp_limits_router)
+    dp.include_router(spamcheck_router)
     return dp

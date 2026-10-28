@@ -68,6 +68,22 @@ async def catalog(tok=Depends(require_token("send"))):
     return {"countries": _catalog()}
 
 
+@router.get("/send/{job_id}")
+async def send_status(job_id: str, tok=Depends(require_token("send"))):
+    """Статус отправки по id из ответа /send (только свои отправки этого токена).
+
+    status: `sent` «Отправлено» · `error` «Ошибка отправки» · `pending` «В обработке».
+    Неизвестный/чужой id → 404.
+    """
+    from bot.services.send_status import status_of_job
+    st = status_of_job(job_id, tok.id)
+    if st is not None:
+        return st
+    if worker.is_pending(job_id, tok.id):
+        return {"id": job_id, "status": "pending", "label": "В обработке"}
+    raise HTTPException(404, "unknown job id")
+
+
 @router.post("/send")
 async def send(body: SendIn, tok=Depends(require_token("send"))):
     # техработы (глобальный kill-switch приёма) → 503

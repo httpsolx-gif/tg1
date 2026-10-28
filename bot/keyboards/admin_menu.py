@@ -3,14 +3,14 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 ADMIN_BUTTONS = [
     ["📧 SMTP",  "🔗 SHORT", "🧩 SRVS",  "📊 STATS"],
     ["👥 USERS", "🛡 API",   "🧪 TEST",  "🚨 ALERT"],
-    ["🖥 NODES", "💾 BACKUP"],
+    ["🖥 NODES", "💾 BACKUP", "🕵️ SPAM"],
 ]
 
 # Разделы для ИНЛАЙН-меню. Убраны из меню: MAIL, TEMPL (в рубрики), AWS (внутрь NODES).
 ADMIN_SECTIONS = [
     ("📧 SMTP", "smtp"), ("🔗 SHORT", "short"), ("🧩 SRVS", "srvs"), ("📊 STATS", "stats"),
     ("👥 USERS", "users"), ("🛡 API", "api"), ("🧪 TEST", "test"), ("🚨 ALERT", "alert"),
-    ("🖥 NODES", "nodes"), ("💾 BACKUP", "backup"),
+    ("🖥 NODES", "nodes"), ("💾 BACKUP", "backup"), ("🕵️ SPAM", "spam"),
 ]
 
 

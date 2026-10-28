@@ -10,7 +10,7 @@ from bot.keyboards.main_menu import main_menu
 from bot.fsm.admin import (
     SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit,
     RubricMailboxAdd, MailboxAdd, MailboxDomains, ScopeInput, SmtpLimit,
-    ServiceCfgEdit, ShortDomainAdd, AccessAdd, UserFlow, ApiTokenFlow,
+    ServiceCfgEdit, ShortDomainAdd, AccessAdd, UserFlow, ApiTokenFlow, SpamSeedAdd,
 )
 
 router = Router()
@@ -45,6 +45,7 @@ async def admin_entry(m: Message):
         ShortDomainAdd.registrar, ShortDomainAdd.node,
         AccessAdd.waiting, UserFlow.act, UserFlow.search,
         ApiTokenFlow.label, ApiTokenFlow.edit, ApiTokenFlow.supp,
+        SpamSeedAdd.waiting,
     ),
     F.text.func(lambda t: isinstance(t, str) and _strip(t) in MENU_TEXTS),
 )
@@ -106,6 +107,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
     from bot.handlers.admin.test import kb_test_root
     from bot.handlers.admin.users import kb_users_root
     from bot.handlers.admin.api import kb_api_root
+    from bot.handlers.admin.spamcheck import kb_spamcheck_root
 
     screens = {
         "smtp": ("SMTP — выберите действие:", kb_smtp_root),
@@ -118,6 +120,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         "test": ("🧪 <b>TEST</b> — проверки и удаление нерабочих:", kb_test_root),
         "users": ("👥 <b>USERS</b> — списки доступа отправителей:", kb_users_root),
         "api": ("🛡 <b>API</b> — токены публичного API:", kb_api_root),
+        "spam": ("🕵️ <b>SPAM-check</b> — сид-ящики и проверка размещения:", kb_spamcheck_root),
     }
     if sec in screens:
         title, kb_fn = screens[sec]
@@ -206,6 +209,13 @@ async def admin_alert(m: Message):
         return
     from bot.handlers.admin.alert import show_alert_root
     await show_alert_root(m)
+
+@router.message(F.text.in_({"🕵️ SPAM", "SPAM"}))
+async def admin_spam(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.spamcheck import show_spamcheck_root
+    await show_spamcheck_root(m)
 
 @router.message(F.text.in_({"🖥 NODES", "NODES"}))
 async def admin_nodes(m: Message):

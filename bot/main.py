@@ -40,6 +40,9 @@ def _ensure_columns(engine):
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS ext_id varchar",
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS ext_username varchar",
         "CREATE INDEX IF NOT EXISTS ix_sendlog_api_token_id ON sendlog (api_token_id)",
+        # статус отправки клиенту по job_id (п.54)
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS job_id varchar",
+        "CREATE INDEX IF NOT EXISTS ix_sendlog_job_id ON sendlog (job_id)",
     ]
     with engine.begin() as conn:
         for s in stmts:
@@ -85,6 +88,7 @@ async def main():
         import common.models.suppression  # noqa: F401  (Suppression — не слать на адрес)
         import common.models.api_audit  # noqa: F401  (ApiAudit — аудит вызовов API)
         import common.models.mx_cache  # noqa: F401  (MxCache — провайдер по MX)
+        import common.models.spamcheck  # noqa: F401  (SpamSeed, SpamCheckResult — авто-проверка на спам)
         SQLModel.metadata.create_all(engine)
         _ensure_columns(engine)
     except Exception as e:
@@ -108,6 +112,13 @@ async def main():
         asyncio.create_task(backup_loop(bot))
     except Exception as e:
         logging.getLogger("bot").warning("backup loop not started: %s", e)
+
+    # Авто-проверка на спам (если заданы SPAMCHECK_CHANNEL_ID и SPAMCHECK_EVERY_MIN)
+    try:
+        from bot.services.spamcheck import spamcheck_loop
+        asyncio.create_task(spamcheck_loop(bot))
+    except Exception as e:
+        logging.getLogger("bot").warning("spamcheck loop not started: %s", e)
 
     logging.getLogger("bot").info("🚀 Bot started")
     await dp.start_polling(bot)

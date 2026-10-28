@@ -97,3 +97,12 @@ class ApiTokenFlow(StatesGroup):
     label = State()
     edit = State()
     supp = State()   # suppression: ввод адресов для добавления/удаления (data: mode)
+
+
+class SpamSeedAdd(StatesGroup):
+    """🕵️ SPAM-check: загрузка сид-ящиков пачкой.
+
+    Строка: `email app_password [сервис] [страна]`. IMAP-хост/подпись — автоматом по
+    домену; сервис/страна не заданы — берётся первая активная пара из каталога.
+    """
+    waiting = State()

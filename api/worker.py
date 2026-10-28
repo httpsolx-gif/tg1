@@ -17,6 +17,14 @@ log = logging.getLogger("api")
 _queue: "asyncio.Queue | None" = None
 _task: "asyncio.Task | None" = None
 _MAXSIZE = 1000
+# job_id → token_id для задач, что ещё в очереди/в работе (для статуса «в обработке»).
+# Один процесс uvicorn → разделяется с роутами. Чистится по завершении задачи.
+_pending: dict[str, int] = {}
+
+
+def is_pending(job_id: str, token_id: int) -> bool:
+    """Задача с таким job_id ещё в очереди/в работе И принадлежит этому токену."""
+    return _pending.get(job_id) == token_id
 
 
 async def _run() -> None:
@@ -30,11 +38,13 @@ async def _run() -> None:
                 api_token_id=job.get("token_id"),
                 ext_id=job.get("ext_id"),
                 ext_username=job.get("ext_username"),
+                job_id=job.get("job_id"),
             )
             log.info("api send %s token=%s ok=%s", job.get("job_id"), job.get("token_id"), res.get("ok"))
         except Exception as e:  # воркер не должен падать из-за одной задачи
             log.exception("api send job %s failed: %s", job.get("job_id"), e)
         finally:
+            _pending.pop(job.get("job_id") or "", None)
             _queue.task_done()
 
 
@@ -68,6 +78,9 @@ async def enqueue(job: dict) -> bool:
         return False
     try:
         _queue.put_nowait(job)
+        jid, tid = job.get("job_id"), job.get("token_id")
+        if jid and tid is not None:
+            _pending[jid] = tid
         return True
     except asyncio.QueueFull:
         return False

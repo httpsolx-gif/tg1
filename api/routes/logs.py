@@ -2,12 +2,13 @@
 
 Раньше здесь был ОДИН статичный пароль (settings.API_LOG_AUTH_TOKEN) со сравнением
 `!=`, который отдал бы email получателей (PII) кому угодно с этим паролем. Заменено
-на обычный хэш-токен + отдельный scope. Тела пока пустые (TODO Фаза 2): когда
-включим, отдавать МИНИМУМ полей и только данные владельца токена, без полных адресов.
+на обычный хэш-токен + отдельный scope. Отдаём МИНИМУМ полей и только отправки
+владельца токена (api_token_id), email замаскирован (`b***@gmail.com`).
 """
 from fastapi import APIRouter, Depends, Query
 
 from api.auth import require_token
+from bot.services.send_status import recent_sends
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -17,11 +18,11 @@ _auth = require_token("logs:read")
 
 @router.get("/errors")
 def list_errors(tok=Depends(_auth), limit: int = Query(50, ge=1, le=500)):
-    # TODO (Фаза 2): выборка ошибок владельца токена, без PII в ответе
-    return {"items": [], "limit": limit}
+    """Последние НЕуспешные отправки этого токена (свежие сверху, email замаскирован)."""
+    return {"items": recent_sends(tok.id, limit=limit, only_errors=True), "limit": limit}
 
 
 @router.get("/sends")
 def list_sends(tok=Depends(_auth), limit: int = Query(50, ge=1, le=500)):
-    # TODO (Фаза 2): выборка отправок владельца токена, домен/хэш вместо полного email
-    return {"items": [], "limit": limit}
+    """Последние отправки этого токена (свежие сверху, email замаскирован)."""
+    return {"items": recent_sends(tok.id, limit=limit), "limit": limit}

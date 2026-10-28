@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     BACKUP_CHANNEL_ID: str = ""
     BACKUP_EVERY_HOURS: int = 0
 
+    # Авто-проверка на спам (п.55): канал для отчётов, период в минутах (0 = выкл),
+    # пауза перед IMAP-проверкой и ссылка-кнопка в пробном письме.
+    SPAMCHECK_CHANNEL_ID: str = ""
+    SPAMCHECK_EVERY_MIN: int = 0
+    SPAMCHECK_WAIT_SEC: int = 90
+    SPAMCHECK_LINK: str = "https://www.google.com"
+
     DATABASE_URL: str = "sqlite:///./dev.db"
 
     LOG_LEVEL: str = "INFO"
