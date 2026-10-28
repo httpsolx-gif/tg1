@@ -87,3 +87,12 @@ class UserFlow(StatesGroup):
     """USERS: ввод id/@username для действия (ban/white/black/unban; data: mode) и для поиска карточки."""
     act = State()
     search = State()
+
+
+class ApiTokenFlow(StatesGroup):
+    """🛡 API: ввод метки при создании токена и редактирование полей из карточки.
+
+    label — создание (ждём метку/кому выдан). edit — правка поля (data: field, tid).
+    """
+    label = State()
+    edit = State()

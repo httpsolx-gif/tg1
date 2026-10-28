@@ -39,9 +39,10 @@ def resolve_template_html(service: str, mailbox: str) -> Optional[str]:
     return t.html if t else None
 
 
-def render_template(html: str, **ctx) -> str:
+def render_template(html: str, raw: Optional[dict] = None, **ctx) -> str:
     """Отрендерить шаблон. Поддерживает Jinja ({{ title }}, {{ url }}, {{ MAIL_URL }})
-    и «сырой» плейсхолдер MAIL_URL (без скобок) в href кнопки письма.
+    и «сырые» плейсхолдеры без скобок: MAIL_URL (href кнопки) и ключи из `raw`
+    (напр. {'*PRICE*': '199', '*PNAME*': 'iPhone'} — для API-отправки).
     При ошибке Jinja — грубая подстановка {{ key }}."""
     src = html or ""
     # ссылка может прийти как url= или MAIL_URL= — синхронизируем оба имени
@@ -58,6 +59,9 @@ def render_template(html: str, **ctx) -> str:
         for k, v in ctx.items():
             val = "" if v is None else str(v)
             out = out.replace("{{ %s }}" % k, val).replace("{{%s}}" % k, val)
+    # «сырые» плейсхолдеры (напр. *PRICE*, *PNAME*) — буквальная подстановка
+    for k, v in (raw or {}).items():
+        out = out.replace(str(k), "" if v is None else str(v))
     # «сырой» MAIL_URL (напр. <a href="MAIL_URL">…) — подставляем ссылку
     if url_val is not None:
         out = out.replace("MAIL_URL", str(url_val))

@@ -35,6 +35,11 @@ def _ensure_columns(engine):
         "ALTER TABLE scope_cfg ADD COLUMN IF NOT EXISTS wrap boolean NOT NULL DEFAULT false",
         "ALTER TABLE scope_smtp ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
         "ALTER TABLE scope_aws ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
+        # API-отправки (п.46): привязка SendLog к токену + данные клиента (id/username)
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS api_token_id integer",
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS ext_id varchar",
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS ext_username varchar",
+        "CREATE INDEX IF NOT EXISTS ix_sendlog_api_token_id ON sendlog (api_token_id)",
     ]
     with engine.begin() as conn:
         for s in stmts:
@@ -76,6 +81,7 @@ async def main():
         import common.models.short_domain  # noqa: F401
         import common.models.access  # noqa: F401  (AccessEntry, SeenUser)
         import common.models.appstate  # noqa: F401  (AppState — курсор выгрузки /sends)
+        import common.models.api_token  # noqa: F401  (ApiToken — токены публичного API)
         SQLModel.metadata.create_all(engine)
         _ensure_columns(engine)
     except Exception as e:

@@ -17,6 +17,7 @@ from bot.handlers.admin.backup import router as backup_router
 from bot.handlers.admin.test import router as test_router
 from bot.handlers.admin.users import router as users_router
 from bot.handlers.admin.sends import router as sends_router
+from bot.handlers.admin.api import router as api_router
 from bot.handlers.admin.mailtypes import router as mailtypes_router
 from bot.handlers.admin.smtp_limits import router as smtp_limits_router
 from bot.middlewares.error_report import ErrorReportMiddleware
@@ -43,6 +44,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(test_router)
     dp.include_router(users_router)
     dp.include_router(sends_router)
+    dp.include_router(api_router)
     dp.include_router(mailtypes_router)
     dp.include_router(smtp_limits_router)
     return dp

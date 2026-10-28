@@ -16,3 +16,7 @@ class SendLog(SQLModel, table=True):
     mailbox: str | None = None        # тип почты (gmail/main/...)
     short_provider: str | None = None # 'off'|'n9.cl'|'dom:{id}'
     track: str | None = Field(default=None, index=True)  # id для привязки перехода (личные домены)
+    # API-отправки (п.46): привязка к токену + данные клиента (только лог/трек)
+    api_token_id: int | None = Field(default=None, index=True)  # NULL = отправка из бота
+    ext_id: str | None = None          # id, переданный клиентом API
+    ext_username: str | None = None    # username, переданный клиентом API
