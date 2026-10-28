@@ -40,6 +40,7 @@ def kb_api_root() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("➕ Создать токен", "api:new")],
         [_btn("📋 Список токенов", "api:list")],
+        [_btn("🚫 Suppression", "api:supp"), _btn("🧾 Аудит", "api:audit")],
         [_btn("⬅️ Назад", "admin:back")],
     ])
 
@@ -376,3 +377,101 @@ async def api_delok(cq: CallbackQuery):
         await cq.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     except Exception:
         await cq.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+# ----------------------------- suppression-лист -----------------------------
+def _kb_supp() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [_btn("➕ Добавить", "api:suppadd"), _btn("🗑 Удалить", "api:suppdel")],
+        [_btn("🔄 Обновить", "api:supp"), _btn("⬅️ Назад", "api:root")],
+    ])
+
+
+async def _show_supp(target, *, edit: bool):
+    from bot.services import suppression as SUP
+    rows = SUP.list_all(limit=30)
+    total = SUP.count()
+    body = "\n".join(f"• <code>{_esc(r.email)}</code>"
+                     + (f" <i>({_esc(r.reason)})</i>" if r.reason else "") for r in rows) or "<i>пусто</i>"
+    text = (
+        f"🚫 <b>Suppression-лист</b> ({total}) — адреса, на которые НЕ слать "
+        "(отписки/жалобы/баунсы). Проверяется и в боте, и в API.\n\n"
+        f"{body}" + ("\n\n<i>показаны последние 30</i>" if total > 30 else "")
+    )
+    if edit:
+        try:
+            await target.edit_text(text, reply_markup=_kb_supp())
+            return
+        except Exception:
+            pass
+    await target.answer(text, reply_markup=_kb_supp())
+
+
+@router.callback_query(F.data == "api:supp")
+async def api_supp(cq: CallbackQuery, state: FSMContext):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    await _show_supp(cq.message, edit=True)
+    await cq.answer()
+
+
+@router.callback_query(F.data.in_({"api:suppadd", "api:suppdel"}))
+async def api_supp_io(cq: CallbackQuery, state: FSMContext):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    mode = "add" if cq.data == "api:suppadd" else "del"
+    await state.set_state(ApiTokenFlow.supp)
+    await state.update_data(supp_mode=mode)
+    verb = "добавить в" if mode == "add" else "убрать из"
+    await cq.message.answer(f"Пришлите e-mail(ы), чтобы {verb} suppression-лист "
+                            "(можно пачкой через пробел/запятую/перенос):")
+    await cq.answer()
+
+
+@router.message(ApiTokenFlow.supp, F.text)
+async def api_supp_text(m: Message, state: FSMContext):
+    if not _admin(m.from_user.id):
+        return
+    from bot.services import suppression as SUP
+    mode = (await state.get_data()).get("supp_mode", "add")
+    await state.clear()
+    if mode == "add":
+        n = SUP.add_bulk(m.text or "", reason="manual")
+        await m.answer(f"✅ Добавлено в suppression: {n}.")
+    else:
+        import re as _re
+        n = sum(1 for p in _re.split(r"[\s,;]+", m.text or "") if p.strip() and SUP.remove(p.strip()))
+        await m.answer(f"🗑 Убрано из suppression: {n}.")
+    await _show_supp(m, edit=False)
+
+
+# ----------------------------- аудит вызовов -----------------------------
+@router.callback_query(F.data == "api:audit")
+async def api_audit_view(cq: CallbackQuery, state: FSMContext):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    from bot.services import api_audit as AUD
+    rows = AUD.recent(limit=20)
+    if rows:
+        lines = []
+        for r in rows:
+            who = f"#{r.token_id}" if r.token_id else (f"{r.token_prefix}…" if r.token_prefix else "—")
+            ts = (r.created_at or "")[11:19]
+            lines.append(f"<code>{ts}</code> {r.status} {_esc(r.method or '')} {_esc(r.path or '')} · {who} · {_esc(r.ip or '')}")
+        body = "\n".join(lines)
+    else:
+        body = "<i>пока нет вызовов</i>"
+    text = f"🧾 <b>Аудит API</b> — последние {len(rows)} вызовов:\n\n{body}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [_btn("🔄 Обновить", "api:audit"), _btn("⬅️ Назад", "api:root")],
+    ])
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=kb)
+    await cq.answer()

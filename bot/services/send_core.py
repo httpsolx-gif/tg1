@@ -122,6 +122,11 @@ def build_payload(
     )
     from bot.services.mailboxes import mailbox_for_email
     from bot.services.scope import scope_short_choice
+    from bot.services.suppression import is_suppressed
+
+    # suppression-лист: на отписки/жалобы/баунсы не слать (бережём репутацию)
+    if is_suppressed(email):
+        raise SendError("🚫 Адрес в suppression-листе (отписка/жалоба) — отправка отменена.")
 
     if sender_class == "black":
         if black_denied(email):

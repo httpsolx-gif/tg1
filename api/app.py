@@ -34,6 +34,30 @@ def build_app() -> FastAPI:
         openapi_url="/openapi.json" if docs_on else None,
         lifespan=_lifespan,
     )
+
+    @app.middleware("http")
+    async def _audit(request, call_next):
+        """Аудит каждого вызова /api/* (п.47): токен/IP/путь/статус. Ошибки глушим."""
+        response = await call_next(request)
+        try:
+            path = request.url.path
+            if path.startswith("/api/"):
+                from api.auth import _client_ip
+                from bot.services import api_tokens as T, api_audit
+                tok_id = None
+                prefix = None
+                auth = request.headers.get("authorization", "")
+                if auth.startswith("Bearer "):
+                    raw = auth.split(" ", 1)[1].strip()
+                    prefix = raw[:14]
+                    t = T.lookup(raw)             # None, если токен не распознан/отозван
+                    tok_id = t.id if t else None
+                api_audit.record(tok_id, prefix, _client_ip(request),
+                                 request.method, path, response.status_code)
+        except Exception:
+            pass
+        return response
+
     app.include_router(redirect_router)
     app.include_router(logs_router)
     app.include_router(send_router)

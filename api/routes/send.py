@@ -13,12 +13,14 @@ import secrets
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
+
 from pydantic import BaseModel
 
 from api.auth import require_token
 from api import worker
 from bot.services import api_tokens as T
+from bot.services import idempotency
 
 router = APIRouter(prefix="/api/v1", tags=["send"])
 
@@ -68,7 +70,14 @@ async def catalog(tok=Depends(require_token("send"))):
 
 
 @router.post("/send")
-async def send(body: SendIn, tok=Depends(require_token("send"))):
+async def send(body: SendIn, tok=Depends(require_token("send")),
+               idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    # идемпотентность: повтор с тем же ключом (в рамках токена) → прежний ответ
+    if idempotency_key:
+        prev = idempotency.get(tok.id, idempotency_key)
+        if prev is not None:
+            return prev
+
     cat = _catalog()
     # страна/сервис — только из каталога и из разрешённых токену
     if body.country not in cat:
@@ -119,4 +128,7 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     if not ok:
         T.consume_quota(tok.id, -1)  # вернуть квоту — в очередь не попало
         raise HTTPException(503, "queue full, try later")
-    return {"id": job_id, "status": "queued"}
+    resp = {"id": job_id, "status": "queued"}
+    if idempotency_key:
+        idempotency.save(tok.id, idempotency_key, resp)  # запомнить ответ под ключом
+    return resp

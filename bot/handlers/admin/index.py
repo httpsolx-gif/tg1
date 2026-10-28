@@ -44,7 +44,7 @@ async def admin_entry(m: Message):
         ShortDomainAdd.domain, ShortDomainAdd.token, ShortDomainAdd.email,
         ShortDomainAdd.registrar, ShortDomainAdd.node,
         AccessAdd.waiting, UserFlow.act, UserFlow.search,
-        ApiTokenFlow.label, ApiTokenFlow.edit,
+        ApiTokenFlow.label, ApiTokenFlow.edit, ApiTokenFlow.supp,
     ),
     F.text.func(lambda t: isinstance(t, str) and _strip(t) in MENU_TEXTS),
 )

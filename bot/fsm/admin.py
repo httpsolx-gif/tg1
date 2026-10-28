@@ -96,3 +96,4 @@ class ApiTokenFlow(StatesGroup):
     """
     label = State()
     edit = State()
+    supp = State()   # suppression: ввод адресов для добавления/удаления (data: mode)

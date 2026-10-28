@@ -47,8 +47,16 @@ async def start() -> None:
         log.info("api send worker started")
 
 
-async def stop() -> None:
+async def stop(drain_timeout: float = 30.0) -> None:
+    """Graceful-shutdown: сперва дожидаемся, пока воркер доработает очередь
+    (новых запросов уже нет — FastAPI остановил приём), затем отменяем задачу.
+    Так при остановке API не теряем поставленные/выполняемые отправки."""
     global _task
+    if _queue is not None:
+        try:
+            await asyncio.wait_for(_queue.join(), timeout=drain_timeout)
+        except asyncio.TimeoutError:
+            log.warning("api send worker: очередь не допроработала за %ss — отменяю", drain_timeout)
     if _task is not None:
         _task.cancel()
         _task = None
