@@ -21,25 +21,30 @@ class ScopeCfg(SQLModel, table=True):
     smtp_at: str | None = None    # ISO, когда последний раз менялась SMTP-база
     autoswitch: bool = True       # автосмена при исчерпании лимита
     switch_limit: int = 0         # лимит автосмены: отправок с одного SMTP до смены (0 = лимит аккаунта)
+    wrap: bool = False            # по кругу: база исчерпана по лимитам → сброс счётчиков и снова с первого
     current_smtp_id: int | None = None  # устарело (до п.30), не используется
     current_key: str | None = None      # текущий аккаунт базы: 'smtp:{id}' | 'aws:{id}' (автосмена / принуд. смена)
 
 
 class ScopeSmtp(SQLModel, table=True):
-    """SMTP-аккаунт в базе области."""
+    """SMTP-аккаунт в базе области. sent_count — счётчик автосмены ПО ЭТОЙ области
+    (один аккаунт в разных областях считается раздельно)."""
     __tablename__ = "scope_smtp"
     __table_args__ = (UniqueConstraint("scope_id", "smtp_id", name="uq_scope_smtp"),)
 
     id: int | None = Field(default=None, primary_key=True)
     scope_id: int = Field(foreign_key="scope_cfg.id", index=True)
     smtp_id: int = Field(index=True)  # без FK: глобальная чистка SMTP не должна падать
+    sent_count: int = 0              # отправлено с этого SMTP в этой области
 
 
 class ScopeAws(SQLModel, table=True):
-    """AWS SES-аккаунт в базе области (грузится вместе с SMTP: region:accesskey:secretkey:emailfrom)."""
+    """AWS SES-аккаунт в базе области (грузится вместе с SMTP: region:accesskey:secretkey:emailfrom).
+    sent_count — счётчик автосмены ПО ЭТОЙ области."""
     __tablename__ = "scope_aws"
     __table_args__ = (UniqueConstraint("scope_id", "aws_id", name="uq_scope_aws"),)
 
     id: int | None = Field(default=None, primary_key=True)
     scope_id: int = Field(foreign_key="scope_cfg.id", index=True)
     aws_id: int = Field(index=True)
+    sent_count: int = 0              # отправлено с этого AWS в этой области

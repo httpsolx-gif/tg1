@@ -342,8 +342,8 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
     # аккаунт для отправки: из базы области (SMTP и AWS вместе, автосмена);
     # нет базы → SMTP раздела SMTP по группе рубрики. У black группа "black" — такой
     # группы в разделе SMTP нет, поэтому без базы области black просто не уйдёт.
-    from bot.services.scope import scope_pick
-    has_base, pick = scope_pick(payload.get("country"), payload.get("service"), payload.get("rubric_id"))
+    from bot.services.scope import scope_pick, bump_scope_count
+    has_base, pick, scope_id = scope_pick(payload.get("country"), payload.get("service"), payload.get("rubric_id"))
     if not has_base:
         smtp = await pick_smtp(
             group=payload["group"], country_code=payload.get("country"), service=payload.get("service")
@@ -382,12 +382,17 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
 
     if ok:
         try:
-            with Session(_engine) as db:
-                row = db.get(SmtpAccount if kind == "smtp" else AwsAccount, acc.id)
-                if row:
-                    row.sent_count = (row.sent_count or 0) + 1
-                    db.add(row)
-                    db.commit()
+            if has_base and scope_id:
+                # счётчик автосмены ЭТОЙ области (один аккаунт в разных сервисах считается раздельно)
+                bump_scope_count(scope_id, kind, acc.id)
+            else:
+                # фолбэк-пул раздела SMTP (группа gmail/main) — глобальный счётчик аккаунта
+                with Session(_engine) as db:
+                    row = db.get(SmtpAccount if kind == "smtp" else AwsAccount, acc.id)
+                    if row:
+                        row.sent_count = (row.sent_count or 0) + 1
+                        db.add(row)
+                        db.commit()
         except Exception as e:
             log.warning("sent_count: %s", e)
 

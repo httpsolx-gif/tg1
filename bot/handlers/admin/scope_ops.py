@@ -48,13 +48,15 @@ def _back_cb(cfg: ScopeCfg) -> str:
     return f"svc:s:{cfg.country}:{cfg.service}"
 
 
-def _limtxt(a, cfg: ScopeCfg | None = None) -> str:
-    return f"{a.sent_count or 0}/{sc.limit_for(a, cfg) or '∞'}"
+def _limtxt(sid: int, kind: str, a, cfg: ScopeCfg | None = None) -> str:
+    """Счётчик/лимит аккаунта в ЭТОЙ области (per-scope счётчик, не глобальный)."""
+    return f"{sc.scope_count(sid, kind, a.id)}/{sc.limit_for(a, cfg) or '∞'}"
 
 
 def _auto_txt(cfg: ScopeCfg) -> str:
     lim = f"смена каждые {cfg.switch_limit}" if cfg.switch_limit else "по лимитам аккаунтов"
-    return f"{'вкл' if cfg.autoswitch else 'выкл'} · {lim}"
+    base = f"{'вкл' if cfg.autoswitch else 'выкл'} · {lim}"
+    return base + (" · по кругу" if cfg.wrap else "")
 
 
 # ---------- карточка ----------
@@ -155,11 +157,16 @@ def _auto_view(sid: int):
     text = (
         f"🔁 Автосмена: <b>{_auto_txt(cfg)}</b>\n\n"
         "Лимит автосмены — сколько писем отправить с одного аккаунта базы (SMTP или AWS), прежде чем перейти на следующий. "
-        "0 = по собственным лимитам аккаунтов (⚙️ SMTP)."
+        "0 = по собственным лимитам аккаунтов (⚙️ SMTP).\n\n"
+        f"🔄 По кругу: <b>{'вкл' if cfg.wrap else 'выкл'}</b> — когда база заканчивается "
+        "(все аккаунты выбрали лимит), счётчики сбрасываются и отправка продолжается "
+        "с первого, а не останавливается.\n"
+        "<i>Счётчики автосмены считаются отдельно по каждому сервису/области.</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [_btn("🔴 Выключить" if cfg.autoswitch else "🟢 Включить", f"sco:autotog:{sid}")],
         [_btn(f"📈 Лимит автосмены: {cfg.switch_limit or '—'}", f"sco:autolim:{sid}")],
+        [_btn(f"🔄 По кругу: {'вкл 🟢' if cfg.wrap else 'выкл 🔴'}", f"sco:wraptog:{sid}")],
         [_btn("⬅️ Назад", f"sco:card:{sid}")],
     ])
     return text, kb
@@ -191,6 +198,23 @@ async def sco_auto_toggle(cq: CallbackQuery):
     text, kb = _auto_view(sid)
     await cq.message.edit_text(text, reply_markup=kb)
     await cq.answer(f"Автосмена {'вкл' if on else 'выкл'}")
+
+
+@router.callback_query(F.data.startswith("sco:wraptog:"))
+async def sco_wrap_toggle(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    sid = _scope_id(cq)
+    with Session(_engine) as db:
+        cfg = db.get(ScopeCfg, sid)
+        cfg.wrap = not cfg.wrap
+        db.add(cfg)
+        db.commit()
+        on = cfg.wrap
+    text, kb = _auto_view(sid)
+    await cq.message.edit_text(text, reply_markup=kb)
+    await cq.answer(f"По кругу {'вкл' if on else 'выкл'}")
 
 
 @router.callback_query(F.data.startswith("sco:autolim:"))
@@ -526,7 +550,7 @@ def _kb_pick(sid: int) -> InlineKeyboardMarkup:
         cfg = db.get(ScopeCfg, sid)
         accs = sc.base_accounts(db, sid)
         aws = sc.base_aws(db, sid)
-    rows = [[_btn(f"🗑 {a.email} — {_limtxt(a, cfg)}", f"sco:clrdel:{sid}:{a.id}")] for a in accs]
+    rows = [[_btn(f"🗑 {a.email} — {_limtxt(sid, 'smtp', a, cfg)}", f"sco:clrdel:{sid}:{a.id}")] for a in accs]
     rows += [[_btn(f"🗑 ☁️ {a.email_from} ({a.region})", f"sco:clrdelaws:{sid}:{a.id}")] for a in aws]
     rows = rows or [[_btn("База пуста", f"sco:card:{sid}")]]
     rows.append([_btn("⬅️ Назад", f"sco:clr:{sid}")])
@@ -566,8 +590,8 @@ async def sco_clear_unused(cq: CallbackQuery):
         return
     sid = _scope_id(cq)
     with Session(_engine) as db:
-        ids = [a.id for a in sc.base_accounts(db, sid) if not (a.sent_count or 0)]
-        aws_ids = [a.id for a in sc.base_aws(db, sid) if not (a.sent_count or 0)]
+        ids = [a.id for a in sc.base_accounts(db, sid) if not sc.scope_count(sid, "smtp", a.id)]
+        aws_ids = [a.id for a in sc.base_aws(db, sid) if not sc.scope_count(sid, "aws", a.id)]
         n = _unlink(db, sid, ids, aws_ids)
     await _show(cq, sid, f"Убрано неиспользуемых: {n}")
 
@@ -603,11 +627,12 @@ def _kb_accs(sid: int) -> InlineKeyboardMarkup:
         ents = sc.entries(db, sid)
     rows = []
     for k, a in ents:
-        mark = "🔴" if (not a.is_active or sc._exhausted(a, cfg)) else "🟢"
+        exh = sc._exhausted(sc.scope_count(sid, k, a.id), a, cfg)
+        mark = "🔴" if (not a.is_active or exh) else "🟢"
         cur = " ⬅️" if sc.key(k, a) == cfg.current_key else ""
         name = a.email if k == "smtp" else f"☁️ {a.email_from} ({a.region})"
         cb = f"sco:acc:{sid}:{a.id}" if k == "smtp" else f"sco:aws:{sid}:{a.id}"
-        rows.append([_btn(f"{mark} {name} {_limtxt(a, cfg)}{cur}", cb)])
+        rows.append([_btn(f"{mark} {name} {_limtxt(sid, k, a, cfg)}{cur}", cb)])
     if not ents:
         rows.append([_btn("База пуста — + SMTP", f"sco:up:{sid}")])
     rows.append([_btn(f"🔁 Автосмена: {_auto_txt(cfg)}", f"sco:auto:{sid}")])
@@ -636,7 +661,7 @@ def _acc_view(sid: int, acc_id: int):
     text = (
         f"📮 <code>{_esc(a.email)}</code>\n"
         f"• {_esc(a.host)}:{a.port}\n"
-        f"• Отправлено/лимит: {_limtxt(a, cfg)}{note}\n"
+        f"• Отправлено/лимит: {_limtxt(sid, 'smtp', a, cfg)}{note}\n"
         f"• Статус: {'🟢 вкл' if a.is_active else '🔴 выкл'}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -676,13 +701,14 @@ async def sco_account_flip(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     sid, acc_id = _ids(cq)
+    if cq.data.startswith("sco:reset:"):
+        sc.reset_scope_count(sid, "smtp", acc_id)  # сброс счётчика именно этой области
+        await _show_acc(cq, sid, acc_id, "Счётчик сброшен")
+        return
     with Session(_engine) as db:
         a = db.get(SmtpAccount, acc_id)
         if a:
-            if cq.data.startswith("sco:reset:"):
-                a.sent_count = 0
-            else:
-                a.is_active = not a.is_active
+            a.is_active = not a.is_active
             db.add(a)
             db.commit()
     await _show_acc(cq, sid, acc_id, "Готово")
@@ -753,7 +779,7 @@ def _aws_view(sid: int, aws_id: int):
     text = (
         f"☁️ AWS SES <code>{_esc(a.email_from)}</code>\n"
         f"• Регион: {_esc(a.region)} (шлётся через ноду с этим регионом, иначе с бота)\n"
-        f"• Отправлено/лимит: {_limtxt(a, cfg)}{note}\n"
+        f"• Отправлено/лимит: {_limtxt(sid, 'aws', a, cfg)}{note}\n"
         f"• Статус: {'🟢 вкл' if a.is_active else '🔴 выкл'}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -789,13 +815,14 @@ async def sco_aws_toggle(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     sid, aws_id = _ids(cq)
+    if cq.data.startswith("sco:awsreset:"):
+        sc.reset_scope_count(sid, "aws", aws_id)
+        await _show_aws(cq, sid, aws_id, "Счётчик сброшен")
+        return
     with Session(_engine) as db:
         a = db.get(AwsAccount, aws_id)
         if a:
-            if cq.data.startswith("sco:awsreset:"):
-                a.sent_count = 0
-            else:
-                a.is_active = not a.is_active
+            a.is_active = not a.is_active
             db.add(a)
             db.commit()
     await _show_aws(cq, sid, aws_id, "Готово")

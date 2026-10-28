@@ -31,6 +31,10 @@ def _ensure_columns(engine):
         # aws_account: лимит/счётчик для единой очереди SMTP+AWS области (п.30)
         "ALTER TABLE aws_account ADD COLUMN IF NOT EXISTS send_limit integer NOT NULL DEFAULT 0",
         "ALTER TABLE aws_account ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
+        # автосмена: «по кругу» + per-scope счётчики на связках (один аккаунт в разных сервисах — раздельно)
+        "ALTER TABLE scope_cfg ADD COLUMN IF NOT EXISTS wrap boolean NOT NULL DEFAULT false",
+        "ALTER TABLE scope_smtp ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
+        "ALTER TABLE scope_aws ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
     ]
     with engine.begin() as conn:
         for s in stmts:
