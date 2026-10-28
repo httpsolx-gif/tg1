@@ -76,3 +76,8 @@ class ShortDomainAdd(StatesGroup):
     email = State()
     registrar = State()
     node = State()
+
+
+class AccessAdd(StatesGroup):
+    """Добавление в список доступа (ban/white/black): ждём id/@username (пачкой). data: lst."""
+    waiting = State()

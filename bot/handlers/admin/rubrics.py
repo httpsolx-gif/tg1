@@ -28,6 +28,8 @@ def rubric_group(rub: dict) -> str:
     """SMTP-группа/target рубрики для SMTP/SHORT: имя рубрики (gmail/main), иначе старое поле, иначе main."""
     from bot.services.smtp_pool import SMTP_GROUPS
     name = (rub.get("name") or "").strip().lower()
+    if name == BLACK_RUBRIC:
+        return "black"  # у black своя SMTP-база области, без фолбэка на main/gmail
     if name in SMTP_GROUPS:
         return name
     return rub.get("smtp_group") or "main"
@@ -35,6 +37,10 @@ def rubric_group(rub: dict) -> str:
 
 # Рубрика-«остальное»: ловит все домены, которых нет в почтах других рубрик
 OTHER_RUBRIC = "other"
+# Рубрика-«black»: профиль для black-отправителей. Её «Почты» = дроп-лист доменов
+# получателей, на которые black НЕ слать. По домену НЕ подбирается (только по классу
+# отправителя). Имя/тайтл/шаблон/SMTP/сокра — в «Сервисы» по этой рубрике.
+BLACK_RUBRIC = "black"
 
 
 def _rubric_dict(r: Rubric) -> dict:
@@ -50,12 +56,54 @@ def rubric_for_email(email: str) -> dict | None:
     other = None
     with Session(_engine) as db:
         for r in db.exec(select(Rubric).order_by(Rubric.id)).all():
-            if (r.name or "").strip().lower() == OTHER_RUBRIC:
+            nm = (r.name or "").strip().lower()
+            if nm == BLACK_RUBRIC:
+                continue  # black — только по классу отправителя, не по домену получателя
+            if nm == OTHER_RUBRIC:
                 other = other or r
             mbs = db.exec(select(RubricMailbox.mailbox).where(RubricMailbox.rubric_id == r.id)).all()
             if domain_in(dom, " ".join(mbs)):
                 return _rubric_dict(r)
         return _rubric_dict(other) if other else None
+
+
+def _get_black_rubric(db) -> Rubric | None:
+    for r in db.exec(select(Rubric).order_by(Rubric.id)).all():
+        if (r.name or "").strip().lower() == BLACK_RUBRIC:
+            return r
+    return None
+
+
+def ensure_black_rubric() -> dict:
+    """Гарантировать наличие зарезервированной рубрики black (создать при отсутствии)."""
+    with Session(_engine) as db:
+        r = _get_black_rubric(db)
+        if not r:
+            r = Rubric(name=BLACK_RUBRIC, created_at=datetime.utcnow().isoformat())
+            db.add(r)
+            db.commit()
+            db.refresh(r)
+        return _rubric_dict(r)
+
+
+def black_denied(email: str) -> bool:
+    """True, если домен получателя в дроп-листе black-рубрики («не слать на»)."""
+    dom = (email or "").rsplit("@", 1)[-1].strip().lower()
+    if not dom:
+        return False
+    from common.domains import domain_in
+    with Session(_engine) as db:
+        r = _get_black_rubric(db)
+        if not r:
+            return False
+        mbs = db.exec(select(RubricMailbox.mailbox).where(RubricMailbox.rubric_id == r.id)).all()
+    return bool(mbs) and domain_in(dom, " ".join(mbs))
+
+
+def _is_black_rid(rid: int) -> bool:
+    with Session(_engine) as db:
+        r = db.get(Rubric, rid)
+        return bool(r and (r.name or "").strip().lower() == BLACK_RUBRIC)
 
 
 # ---------- keyboards ----------
@@ -89,12 +137,27 @@ def _rubric_view(rid: int):
         r = db.get(Rubric, rid)
         if not r:
             return None, None
+        rname = r.name
         mbs = db.exec(select(RubricMailbox).where(RubricMailbox.rubric_id == rid)).all()
         boxes = _esc(", ".join(m.mailbox for m in mbs)) or "—"
+    nm = (rname or "").strip().lower()
+    if nm == BLACK_RUBRIC:
+        text = (
+            f"⚫️ <b>{rname}</b> — профиль для <b>black</b>-отправителей\n\n"
+            f"• 🚫 Не слать на: {boxes}\n\n"
+            "<i>Домены получателей, на которые black-отправителям письма не уходят. "
+            "Имя/тайтл/шаблон/SMTP/сокращатель для black настраиваются в 🧩 Сервисы "
+            "по рубрике «black».</i>"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚫 Не слать на", callback_data=f"rub:mb:{rid}")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="rub:root")],
+        ])
+        return text, kb
     catch_all = "• Сюда попадают ВСЕ домены, которых нет в почтах других рубрик.\n" \
-        if (r.name or "").strip().lower() == OTHER_RUBRIC else ""
+        if nm == OTHER_RUBRIC else ""
     text = (
-        f"🗂 <b>{r.name}</b>\n\n"
+        f"🗂 <b>{rname}</b>\n\n"
         f"• Почты: {boxes}\n{catch_all}\n"
         f"<i>По почтам выбирается рубрика при отправке. SMTP и сокращатель — в разделах SMTP / SHORT, "
         f"тайтл и имя отправителя — в «Сервисы».</i>"
@@ -231,6 +294,9 @@ async def rub_delete(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     rid = int(cq.data.split(":")[-1])
+    if _is_black_rid(rid):
+        await cq.answer("Рубрику black удалять нельзя — это профиль black-отправителей.", show_alert=True)
+        return
     with Session(_engine) as db:
         for mb in db.exec(select(RubricMailbox).where(RubricMailbox.rubric_id == rid)).all():
             db.delete(mb)
@@ -249,10 +315,12 @@ async def rub_mailboxes(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     rid = int(cq.data.split(":")[-1])
+    title = ("🚫 Не слать на — домены получателей (+ добавить / 🗑 убрать):"
+             if _is_black_rid(rid) else "✉️ Почты рубрики (+ добавить / 🗑 убрать):")
     try:
-        await cq.message.edit_text("✉️ Почты рубрики (+ добавить / 🗑 убрать):", reply_markup=_kb_mailboxes(rid))
+        await cq.message.edit_text(title, reply_markup=_kb_mailboxes(rid))
     except Exception:
-        await cq.message.answer("✉️ Почты рубрики:", reply_markup=_kb_mailboxes(rid))
+        await cq.message.answer(title, reply_markup=_kb_mailboxes(rid))
     await cq.answer()
 
 
@@ -264,10 +332,16 @@ async def rub_mailbox_add(cq: CallbackQuery, state: FSMContext):
     rid = int(cq.data.split(":")[2])
     await state.set_state(RubricMailboxAdd.waiting)
     await state.update_data(rid=rid)
-    await cq.message.answer(
-        "Отправьте почты одним сообщением через запятую — любые значения\n"
-        "(напр. <code>web, gmx, gmail.com, t-online</code>):"
-    )
+    if _is_black_rid(rid):
+        await cq.message.answer(
+            "Отправьте домены получателей, на которые <b>black НЕ слать</b>, через запятую\n"
+            "(напр. <code>gmail.com, yahoo.com, web.de</code>):"
+        )
+    else:
+        await cq.message.answer(
+            "Отправьте почты одним сообщением через запятую — любые значения\n"
+            "(напр. <code>web, gmx, gmail.com, t-online</code>):"
+        )
     await cq.answer()
 
 

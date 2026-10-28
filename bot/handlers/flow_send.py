@@ -37,6 +37,13 @@ router = Router(name="flow-send")
 _engine = get_engine()
 
 
+def _sender_class(user) -> str:
+    """'ban' | 'white' | 'black' по id/username отправителя (админ → white)."""
+    from bot.services.access import classify
+    from common.config import settings as _s
+    return classify(user.id, getattr(user, "username", None), _s.admin_ids_set)
+
+
 class SendFlow(StatesGroup):
     country = State()
     service = State()
@@ -106,6 +113,9 @@ def _kb_result() -> InlineKeyboardMarkup:
 @router.message(Command("send"))
 @router.message(F.text.func(lambda t: isinstance(t, str) and _strip(t) == "Отправить письмо"))
 async def start_send(m: Message, state: FSMContext):
+    if _sender_class(m.from_user) == "ban":
+        await m.answer("🚫 Доступ к отправке заблокирован.")
+        return
     await state.clear()
     await state.set_state(SendFlow.country)
     await m.answer("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
@@ -113,6 +123,9 @@ async def start_send(m: Message, state: FSMContext):
 
 @router.callback_query(F.data == "send:new")
 async def send_new(cq: CallbackQuery, state: FSMContext):
+    if _sender_class(cq.from_user) == "ban":
+        await cq.answer("🚫 Доступ к отправке заблокирован.", show_alert=True)
+        return
     await state.clear()
     await state.set_state(SendFlow.country)
     await cq.message.answer("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
@@ -208,12 +221,29 @@ async def take_email(m: Message, state: FSMContext):
     if not email or "@" not in email:
         await m.answer("❗️ Неверный e-mail.", reply_markup=_kb_cancel())
         return
-    rub = rubric_for_email(email)
-    if not rub:
-        dom = email.rsplit("@", 1)[-1]
+    # классификация отправителя: ban → блок; black → отдельный профиль; white → обычный путь
+    cls = _sender_class(m.from_user)
+    if cls == "ban":
         await state.clear()
-        await m.answer(f"🚫 Нет рубрики для домена <b>{dom}</b>. Добавь его в «✉️ Почты» нужной рубрики или создай рубрику <b>other</b> — она ловит все остальные домены (🧩 SRVS → Рубрики).")
+        await m.answer("🚫 Доступ к отправке заблокирован.")
         return
+    if cls == "black":
+        # black-отправитель: рубрика принудительно = «black», свой профиль по сервисам.
+        # Домен в дроп-листе black-рубрики («не слать на») → письмо не уходит.
+        from bot.handlers.admin.rubrics import ensure_black_rubric, black_denied
+        if black_denied(email):
+            dom = email.rsplit("@", 1)[-1]
+            await state.clear()
+            await m.answer(f"🚫 На домен <b>{dom}</b> отправка для black запрещена (дроп-лист рубрики «black»).")
+            return
+        rub = ensure_black_rubric()
+    else:
+        rub = rubric_for_email(email)
+        if not rub:
+            dom = email.rsplit("@", 1)[-1]
+            await state.clear()
+            await m.answer(f"🚫 Нет рубрики для домена <b>{dom}</b>. Добавь его в «✉️ Почты» нужной рубрики или создай рубрику <b>other</b> — она ловит все остальные домены (🧩 SRVS → Рубрики).")
+            return
     data = await state.get_data()
     await state.clear()
     service = data["service"]
@@ -237,8 +267,9 @@ async def take_email(m: Message, state: FSMContext):
     else:
         tpl_name = f"<code>{service}-{code}.html</code> ⚠️ (нет — будет стандартный)"
     ovr = " 🔧" if cfg else ""
+    rub_label = "Рубрика (black-отправитель)" if cls == "black" else "Рубрика по домену"
     await m.answer(
-        f"Рубрика по домену: <b>{rub['name']}</b> · почта <b>{mailbox}</b>{ovr}\n"
+        f"{rub_label}: <b>{rub['name']}</b> · почта <b>{mailbox}</b>{ovr}\n"
         f"• Шаблон: {tpl_name}\n"
         f"• Тайтл: {title}\n"
         f"• Отправитель: {sender}\n\n"
@@ -302,7 +333,9 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
     smtp = None
     from_disp = None
     via = "локально"
-    # аккаунт — из базы области (SMTP и AWS вместе, автосмена); нет базы → SMTP раздела SMTP
+    # аккаунт для отправки: из базы области (SMTP и AWS вместе, автосмена);
+    # нет базы → SMTP раздела SMTP по группе рубрики. У black группа "black" — такой
+    # группы в разделе SMTP нет, поэтому без базы области black просто не уйдёт.
     from bot.services.scope import scope_pick
     has_base, pick = scope_pick(payload.get("country"), payload.get("service"), payload.get("rubric_id"))
     if not has_base:
@@ -311,7 +344,12 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
         )
         pick = ("smtp", smtp) if smtp else None
     if pick is None:
-        where = "в базе области (все исчерпаны/выключены)" if has_base else f"(базы области нет, в разделе SMTP для группы «{payload['group']}» тоже)"
+        if payload["group"] == "black":
+            where = ("в базе области (все исчерпаны/выключены)" if has_base
+                     else "(нет SMTP для black — задайте в 🧩 Сервисы → рубрика «black» → SMTP)")
+        else:
+            where = ("в базе области (все исчерпаны/выключены)" if has_base
+                     else f"(базы области нет, в разделе SMTP для группы «{payload['group']}» тоже)")
         await say(f"🚫 Нет доступного аккаунта для отправки {where}.")
         return
     kind, acc = pick

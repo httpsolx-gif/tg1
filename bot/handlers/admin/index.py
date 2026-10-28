@@ -10,7 +10,7 @@ from bot.keyboards.main_menu import main_menu
 from bot.fsm.admin import (
     SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit,
     RubricMailboxAdd, MailboxAdd, MailboxDomains, ScopeInput, SmtpLimit,
-    ServiceCfgEdit, ShortDomainAdd,
+    ServiceCfgEdit, ShortDomainAdd, AccessAdd,
 )
 
 router = Router()
@@ -43,6 +43,7 @@ async def admin_entry(m: Message):
         SmtpLimit.value,
         ShortDomainAdd.domain, ShortDomainAdd.token, ShortDomainAdd.email,
         ShortDomainAdd.registrar, ShortDomainAdd.node,
+        AccessAdd.waiting,
     ),
     F.text.func(lambda t: isinstance(t, str) and _strip(t) in MENU_TEXTS),
 )
@@ -102,6 +103,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
     from bot.handlers.admin.stats import kb_stats_root
     from bot.handlers.admin.backup import kb_backup_root
     from bot.handlers.admin.test import kb_test_root
+    from bot.handlers.admin.users import kb_users_root
 
     screens = {
         "smtp": ("SMTP — выберите действие:", kb_smtp_root),
@@ -112,6 +114,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         "stats": ("📊 <b>STATS</b> — отправки / переходы / конверсия:", kb_stats_root),
         "backup": ("💾 <b>BACKUP</b> — резервные копии и выгрузка БД:", kb_backup_root),
         "test": ("🧪 <b>TEST</b> — проверки и удаление нерабочих:", kb_test_root),
+        "users": ("👥 <b>USERS</b> — списки доступа отправителей:", kb_users_root),
     }
     if sec in screens:
         title, kb_fn = screens[sec]
@@ -124,7 +127,6 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
 
     # заглушки — просто текст + кнопка назад в админку
     stubs = {
-        "users": "👥 USERS — подписки/блокировки/админки (подключим далее).",
         "api": "🛡 API — добавить/удалить/изменить токены (подключим далее).",
         "alert": "🚨 ALERT — настройки тревог/уведомлений (подключим далее).",
     }
