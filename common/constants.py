@@ -51,7 +51,14 @@ COUNTRY_NAMES = {
 
 # Список сервисов
 ALL_SERVICES = [
-    "2dehands.be","acs.gr","alkupiac.hu","allegro.pl","anibis.fr.ch","aramex.au","aukro.cz","balikovna.cz","bazar.bg","bazos.cz","bazos.sk","bgpost.bg","blablacar.cz","blablacar.fr","blocket.se","bolha.sl","booking.eu","box.gr","carousell.au","carousell.ca","carousell.my","carousell.sg","ceskaposta.cz","correos.es","ctt.pt","dal.nl","dao.dk","dba.dk","depop.au","depop.co.uk","depop.de","dhl.co.uk","dhl.cz","dhl.de","dhl.hr","dpd.at","dpd.co.uk","dpd.cz","dpd.fr","dpd.hr","dpd.hu","dpd.lt","dpd.pl","dpd.sk","dpd.sl","ebay.de","econt.bg","facebook.at","facebook.cz","facebook.lt","facebook.sk","facebook.tw","fedex.ca","fedex.co.uk","fedex.ie","fedex.tw","finn.no","foxpost.hu","gls.hu","gumtree.au","gumtree.co.uk","helthjem.no","hermes.de","inpost.pl","inpostpl.api","jofogas.hu","kaidee.tw","kijiji.ca","laposte.fr","leboncoin.fr","locanto.de","lot.bg","marketplaats.nl","matkahuolto.fi","mbway.pt","milanuncios.es","mpl.hu","olx.ar","olx.bg","olx.pl","olx.pt","olxpl.api","olxpl2.api","omniva.ee","omniva.lt","packeta.hu","packeta.sk","paypal.de","paypal.eu","pls.hr","poczta.pl","poshmark.au","poshmark.ca","poshmark.usa","post.at","post.au","post.ca","post.ch","post.ch.fr","post.de","post.nl","post.sk","posten.no","posti.fi","postnord.dk","postnord.no","postnord.se","ppl.cz","quoka.de","royal.co.uk","sendle.au","shpock.at","speedire.it","subito.it","tise.fi","tori.fi","tori02.fi","tori2.fi","trendsales.dk","tutti.ch","vatera.hu","vendora.gr","vinted.at","vinted.be","vinted.ca","vinted.co.uk","vinted.cz","vinted.de","vinted.dk","vinted.es","vinted.fi","vinted.fr","vinted.gr","vinted.hu","vinted.it","vinted.lt","vinted.lu","vinted.nl","vinted.pl","vinted.pt","vinted.se","vinted.sk","vinted.usa","wallapop.co.uk","wallapop.es","wallapop.fr","wallapop.it","wallapop.pt","willhaben.at","wu.au","zasilkovna.cz"
+    # Тестовые сервисы (реальные сервисы удалены). Имена содержат суффикс страны,
+    # чтобы COUNTRY_SERVICES раскладывал их по странам как раньше.
+    "myemail.pl", "testshop.pl",
+    "myemail.de", "testshop.de",
+    "myemail.cz", "testshop.cz",
+    "myemail.fr",
+    "myemail.co.uk", "testshop.co.uk",
+    "myemail.usa",
 ]
 
 # Список стран (ISO-коды)

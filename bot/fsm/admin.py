@@ -38,6 +38,17 @@ class RubricEdit(StatesGroup):
     value = State()
 
 
+class RubricMailboxAdd(StatesGroup):
+    """Почты рубрики: ждём список через запятую (web, gmx, gmail.com …)."""
+    waiting = State()
+
+
+class ScopeInput(StatesGroup):
+    """Области SMTP/SHORT: загрузка SMTP-базы (текст/.txt) или ввод лимита."""
+    smtp = State()
+    limit = State()
+
+
 class MailboxAdd(StatesGroup):
     """Добавление кастомного типа почты: ждём `код имя`."""
     waiting = State()
@@ -53,11 +64,15 @@ class ServiceCfgEdit(StatesGroup):
     value = State()
 
 
-class AwsAdd(StatesGroup):
-    """Добавление AWS SES: ждём строки region:accesskey:secretkey:emailfrom."""
-    waiting = State()
-
-
 class SmtpLimit(StatesGroup):
     """Ввод числового лимита отправок (на аккаунт или группу)."""
     value = State()
+
+
+class ShortDomainAdd(StatesGroup):
+    """Добавление личного short-домена: домен → CF токен → e-mail → токен регистратора → нода."""
+    domain = State()
+    token = State()
+    email = State()
+    registrar = State()
+    node = State()

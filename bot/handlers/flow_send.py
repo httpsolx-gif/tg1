@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime
 from typing import Optional
 
@@ -16,7 +17,6 @@ from common.db import get_engine
 from common.models.send_log import SendLog
 from common.models.node import Node
 from common.models.aws import AwsAccount
-from common.models.template import EmailTemplate
 from common.models.smtp import SmtpAccount
 from bot.services.smtp_pool import pick_smtp
 from bot.services.templates import render_template, default_template, resolve_template_html
@@ -26,7 +26,7 @@ from bot.services.node_runner import send_via_node, send_ses_via_node
 from bot.services.aws_ses import send_via_ses
 from bot.keyboards.admin_menu import ADMIN_BUTTONS
 from bot.keyboards.icons import strip_lead_emoji as _strip
-from bot.handlers.admin.rubrics import rubric_for_email
+from bot.handlers.admin.rubrics import rubric_for_email, rubric_group
 
 # тексты нижнего меню — выход из флоу
 _MENU_TEXTS = {"⬅️ Назад", "🛠 Админка", "📋 Меню"} | {t for row in ADMIN_BUTTONS for t in row}
@@ -38,10 +38,10 @@ _engine = get_engine()
 
 
 class SendFlow(StatesGroup):
+    country = State()
     service = State()
     link = State()
     email = State()
-    backend = State()
 
 
 # ---------- keyboards ----------
@@ -49,13 +49,34 @@ def _kb_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✖️ Отмена", callback_data="send:cancel")]])
 
 
-def _kb_services():
-    with Session(_engine) as db:
-        rows_ = db.exec(select(EmailTemplate.service).distinct().order_by(EmailTemplate.service)).all()
-    services = [r if isinstance(r, str) else r[0] for r in rows_]
-    rows = [[InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"send:svc:{s}")] for s in services]
+def _kb_countries() -> InlineKeyboardMarkup:
+    """Страны, у которых есть сервисы (COUNTRY_SERVICES непустой)."""
+    from common.constants import COUNTRIES, COUNTRY_FLAGS, COUNTRY_SERVICES
+    btns = [
+        InlineKeyboardButton(text=f"{COUNTRY_FLAGS.get(c, '')} {c}", callback_data=f"send:ctry:{c}")
+        for c in COUNTRIES if COUNTRY_SERVICES.get(c)
+    ]
+    rows = [btns[i:i + 3] for i in range(0, len(btns), 3)]
     rows.append([InlineKeyboardButton(text="✖️ Отмена", callback_data="send:cancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows), services
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _kb_services(country: str) -> InlineKeyboardMarkup:
+    """Сервисы выбранной страны (из COUNTRY_SERVICES); сервис можно и ввести текстом."""
+    from common.constants import COUNTRY_SERVICES
+    services = COUNTRY_SERVICES.get(country, [])
+    btns = [InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"send:svc:{s}") for s in services]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows.append([InlineKeyboardButton(text="⬅️ Страны", callback_data="send:ctries")])
+    rows.append([InlineKeyboardButton(text="✖️ Отмена", callback_data="send:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _short_enabled(service: Optional[str], country: Optional[str], target: str) -> bool:
+    """Сокращать ли ссылку — по привязкам раздела SHORT (сервис > страна > рубрика-target > global)."""
+    from bot.services.short_policy import get_binding
+    with Session(_engine) as db:
+        return get_binding(db, service=service, country=country, target=target) is not None
 
 
 def _node_for_aws(aws) -> "Node | None":
@@ -77,43 +98,34 @@ def _node_for_aws(aws) -> "Node | None":
     return None
 
 
-def _kb_backends() -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text="🖥 Локально", callback_data="send:be:local")]]
-    with Session(_engine) as db:
-        nodes = db.exec(select(Node).where(Node.is_active == True).order_by(Node.id)).all()  # noqa: E712
-        aws = db.exec(select(AwsAccount).where(AwsAccount.is_active == True).order_by(AwsAccount.id)).all()  # noqa: E712
-    for n in nodes:
-        geo = f" · {n.region}" if n.region else ""
-        rows.append([InlineKeyboardButton(text=f"🖥 {n.login}@{n.ip}{geo}", callback_data=f"send:be:node:{n.id}")])
-    for a in aws:
-        node = _node_for_aws(a)
-        tag = f" ({a.region}→нода)" if node else f" ({a.region}→bot)"
-        rows.append([InlineKeyboardButton(text=f"☁️ SES {a.email_from}{tag}", callback_data=f"send:be:aws:{a.id}")])
-    rows.append([InlineKeyboardButton(text="✖️ Отмена", callback_data="send:cancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def _kb_result() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✉️ Новое письмо", callback_data="send:new")]])
 
 
 # ---------- entry ----------
 @router.message(Command("send"))
-@router.message(F.text.in_(["📤 Отправить письмо", "Отправить письмо", "📨 Отправить письмо"]))
+@router.message(F.text.func(lambda t: isinstance(t, str) and _strip(t) == "Отправить письмо"))
 async def start_send(m: Message, state: FSMContext):
     await state.clear()
-    await state.set_state(SendFlow.service)
-    kb, services = _kb_services()
-    hint = "Выберите сервис или введите вручную (напр. olx.pl):" if services else "Введите сервис (напр. olx.pl):"
-    await m.answer(f"✉️ Новое письмо.\n\n🔹 {hint}", reply_markup=kb)
+    await state.set_state(SendFlow.country)
+    await m.answer("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
 
 
 @router.callback_query(F.data == "send:new")
 async def send_new(cq: CallbackQuery, state: FSMContext):
     await state.clear()
-    await state.set_state(SendFlow.service)
-    kb, _ = _kb_services()
-    await cq.message.answer("✉️ Новое письмо.\n\n🔹 Выберите сервис или введите вручную:", reply_markup=kb)
+    await state.set_state(SendFlow.country)
+    await cq.message.answer("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
+    await cq.answer()
+
+
+@router.callback_query(F.data == "send:ctries")
+async def send_back_countries(cq: CallbackQuery, state: FSMContext):
+    await state.set_state(SendFlow.country)
+    try:
+        await cq.message.edit_text("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
+    except Exception:
+        await cq.message.answer("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
     await cq.answer()
 
 
@@ -128,12 +140,26 @@ async def send_cancel(cq: CallbackQuery, state: FSMContext):
 
 
 @router.message(
-    StateFilter(SendFlow.service, SendFlow.link, SendFlow.email, SendFlow.backend),
-    F.text.in_(_MENU_TEXTS),
+    StateFilter(SendFlow.country, SendFlow.service, SendFlow.link, SendFlow.email),
+    F.text.func(lambda t: isinstance(t, str) and _strip(t) in _MENU_TEXTS),
 )
 async def send_cancel_on_menu(m: Message, state: FSMContext):
     await state.clear()
     await m.answer("Отправка отменена.")
+
+
+# ---------- country ----------
+@router.callback_query(SendFlow.country, F.data.startswith("send:ctry:"))
+async def take_country(cq: CallbackQuery, state: FSMContext):
+    code = cq.data.split(":", 2)[2]
+    await state.update_data(country=code)
+    await state.set_state(SendFlow.service)
+    txt = f"Страна: <b>{code}</b>\n\n🔹 Выберите сервис или введите вручную (напр. myemail.pl):"
+    try:
+        await cq.message.edit_text(txt, reply_markup=_kb_services(code))
+    except Exception:
+        await cq.message.answer(txt, reply_markup=_kb_services(code))
+    await cq.answer()
 
 
 # ---------- service ----------
@@ -142,7 +168,10 @@ async def take_service_cb(cq: CallbackQuery, state: FSMContext):
     service = cq.data.split(":", 2)[2]
     await state.update_data(service=service)
     await state.set_state(SendFlow.link)
-    await cq.message.edit_text(f"Сервис: <b>{service}</b>\n\n🔗 Введите ссылку для письма:", reply_markup=_kb_cancel())
+    await cq.message.edit_text(
+        f"Сервис: <b>{service}</b>\n\n🔗 Пришлите ссылку (подставится вместо <code>MAIL_URL</code> в кнопке письма):",
+        reply_markup=_kb_cancel(),
+    )
     await cq.answer()
 
 
@@ -150,11 +179,14 @@ async def take_service_cb(cq: CallbackQuery, state: FSMContext):
 async def take_service_text(m: Message, state: FSMContext):
     service = (m.text or "").strip()
     if not service:
-        await m.answer("Пустой сервис. Введите ещё раз (напр. olx.pl):")
+        await m.answer("Пустой сервис. Введите ещё раз (напр. myemail.pl):")
         return
     await state.update_data(service=service)
     await state.set_state(SendFlow.link)
-    await m.answer(f"Сервис: <b>{service}</b>\n\n🔗 Введите ссылку для письма:", reply_markup=_kb_cancel())
+    await m.answer(
+        f"Сервис: <b>{service}</b>\n\n🔗 Пришлите ссылку (подставится вместо <code>MAIL_URL</code> в кнопке письма):",
+        reply_markup=_kb_cancel(),
+    )
 
 
 # ---------- link ----------
@@ -180,11 +212,10 @@ async def take_email(m: Message, state: FSMContext):
     if not rub:
         dom = email.rsplit("@", 1)[-1]
         await state.clear()
-        await m.answer(f"🚫 Нет рубрики для домена <b>{dom}</b>. Создай рубрику с этим доменом в 🧩 SRVS.")
+        await m.answer(f"🚫 Нет рубрики для домена <b>{dom}</b>. Добавь его в «✉️ Почты» нужной рубрики или создай рубрику <b>other</b> — она ловит все остальные домены (🧩 SRVS → Рубрики).")
         return
     data = await state.get_data()
-    await state.update_data(email=email, rubric=rub)
-    await state.set_state(SendFlow.backend)
+    await state.clear()
     service = data["service"]
     code = (rub["name"][:1] or "").lower()
     # почта по домену + возможное переопределение (сервис×рубрика×почта)
@@ -194,112 +225,124 @@ async def take_email(m: Message, state: FSMContext):
     cfg = service_rubric_cfg(service, rub["id"], mailbox) or {}
     sender = cfg.get("sender_name") or rub.get("sender_name") or "—"
     title = cfg.get("title") or rub.get("title") or "—"
-    has_tpl = bool(cfg.get("template_html")) or resolve_template_html(service, code) is not None
-    tpl_name = "(из конфига сервиса)" if cfg.get("template_html") else f"<code>{service}-{code}.html</code>"
-    tpl_note = "" if has_tpl else " ⚠️ (нет — будет стандартный)"
+    # шаблон: конфиг сервиса → под рубрику (service-код) → общий (service.html) → стандартный
+    tpl_spec = resolve_template_html(service, code)
+    tpl_gen = resolve_template_html(service, "") if tpl_spec is None else None
+    if cfg.get("template_html"):
+        tpl_name = "(из конфига сервиса)"
+    elif tpl_spec is not None:
+        tpl_name = f"<code>{service}-{code}.html</code>"
+    elif tpl_gen is not None:
+        tpl_name = f"<code>{service}.html</code> (общий)"
+    else:
+        tpl_name = f"<code>{service}-{code}.html</code> ⚠️ (нет — будет стандартный)"
     ovr = " 🔧" if cfg else ""
     await m.answer(
         f"Рубрика по домену: <b>{rub['name']}</b> · почта <b>{mailbox}</b>{ovr}\n"
-        f"• SMTP-группа: {rub.get('smtp_group') or 'main'}\n"
-        f"• Шаблон: {tpl_name}{tpl_note}\n"
+        f"• Шаблон: {tpl_name}\n"
         f"• Тайтл: {title}\n"
         f"• Отправитель: {sender}\n\n"
-        "🖥 Откуда отправлять?",
-        reply_markup=_kb_backends(),
+        "⏳ Отправляю…"
     )
-
-
-# ---------- backend → отправка ----------
-@router.callback_query(SendFlow.backend, F.data.startswith("send:be:"))
-async def take_backend(cq: CallbackQuery, state: FSMContext):
-    parts = cq.data.split(":")  # send:be:<kind>[:id]
-    kind = parts[2]
-    node_id = aws_id = None
-    if kind == "node":
-        node_id = int(parts[3])
-    elif kind == "aws":
-        aws_id = int(parts[3])
-    data = await state.get_data()
-    await state.clear()
-    rub = data["rubric"]
-    service = data["service"]
-    email = data["email"]
-    # почта — по домену получателя; конфиг (сервис×рубрика×почта) переопределяет
-    from bot.services.mailboxes import mailbox_for_email
-    from bot.handlers.admin.rubrics import service_rubric_cfg
-    mailbox = mailbox_for_email(email, default="main")
-    cfg = service_rubric_cfg(service, rub["id"], mailbox) or {}
-    code = (rub["name"][:1] or "").lower()
-    html = cfg.get("template_html") or resolve_template_html(service, code) or default_template()
+    group = rubric_group(rub)
+    # SHORT: область (страна×сервис×рубрика, ALL; побеждает настроенная последней) → раздел SHORT
+    # Провайдер: 'off' | 'n9.cl' | 'dom:{id}' (личный домен). Нет настройки области → легаси ShortBinding.
+    from bot.services.scope import scope_short_choice
+    provider = scope_short_choice(data.get("country"), service, rub["id"])
+    if provider is None:
+        provider = "n9.cl" if _short_enabled(service, data.get("country"), group) else "off"
+    html = (
+        cfg.get("template_html")
+        or tpl_spec
+        or tpl_gen
+        or default_template()
+    )
     payload = {
-        "group": rub.get("smtp_group") or "main",
+        "group": group,
+        "country": data.get("country"),
+        "service": service,
         "sender": cfg.get("sender_name") or rub.get("sender_name"),
         "subject": cfg.get("title") or rub.get("title") or "Notification",
         "template": html,
         "link": data["link"],
         "email": email,
-        "shorten": bool(rub.get("shortener")),
-        "node_id": node_id,
-        "aws_id": aws_id,
+        "short_provider": provider,
+        "mailbox": mailbox,
+        "rubric_id": rub["id"],
         "rubric_name": f"{rub['name']} · {mailbox}",
     }
-    try:
-        await cq.message.edit_text("⏳ Отправляю…")
-    except Exception:
-        pass
-    await cq.answer()
-    await _do_send(cq.message, payload, user_id=cq.from_user.id)
+    await _do_send(m, payload, user_id=m.from_user.id)
+
+
+async def _resolve_short(link: str, provider: str, track: Optional[str] = None) -> str:
+    """Короткая ссылка по провайдеру области: off → как есть, dom:{id} → личный домен
+    (локально, без сети, с трек-id для статистики), иначе → n9."""
+    if not link or not provider or provider == "off":
+        return link
+    if provider.startswith("dom:"):
+        from bot.services.short_domain import personal_short
+        return await personal_short(provider, link, track)
+    return await shorten_url(link)
+
+
+def _first_node() -> "Node | None":
+    """Нода для SMTP: первая активная (по id)."""
+    with Session(_engine) as db:
+        return db.exec(select(Node).where(Node.is_active == True).order_by(Node.id)).first()  # noqa: E712
 
 
 async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
     say = target.answer
-    short = await shorten_url(payload["link"]) if (payload["link"] and payload.get("shorten")) else payload["link"]
+    provider = payload.get("short_provider") or "off"
+    # трек-id только для личных доменов (по нему привязываем переход к отправке)
+    track = secrets.token_hex(6) if provider.startswith("dom:") else None
+    short = await _resolve_short(payload["link"], provider, track)
     html = render_template(payload["template"], title=payload["subject"], url=short)
 
-    aws_id = payload.get("aws_id")
-    node_id = payload.get("node_id")
     smtp = None
     from_disp = None
     via = "локально"
+    # аккаунт — из базы области (SMTP и AWS вместе, автосмена); нет базы → SMTP раздела SMTP
+    from bot.services.scope import scope_pick
+    has_base, pick = scope_pick(payload.get("country"), payload.get("service"), payload.get("rubric_id"))
+    if not has_base:
+        smtp = await pick_smtp(
+            group=payload["group"], country_code=payload.get("country"), service=payload.get("service")
+        )
+        pick = ("smtp", smtp) if smtp else None
+    if pick is None:
+        where = "в базе области (все исчерпаны/выключены)" if has_base else f"(базы области нет, в разделе SMTP для группы «{payload['group']}» тоже)"
+        await say(f"🚫 Нет доступного аккаунта для отправки {where}.")
+        return
+    kind, acc = pick
 
-    if aws_id is not None:
-        with Session(_engine) as db:
-            aws = db.get(AwsAccount, aws_id)
-        if aws is None:
-            await say("🚫 AWS-аккаунт не найден.")
-            return
-        from_disp = aws.email_from
-        node = _node_for_aws(aws)  # маршрут по региону (гео), затем ручная привязка
+    if kind == "aws":
+        from_disp = acc.email_from
+        node = _node_for_aws(acc)  # нода с тем же регионом
         if node is not None:
-            via = f"SES через ноду {node.login}@{node.ip} ({aws.region})"
-            ok, info = await send_ses_via_node(node, aws, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
+            via = f"SES через ноду {node.login}@{node.ip} ({acc.region})"
+            ok, info = await send_ses_via_node(node, acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
         else:
-            via = f"SES {aws.email_from} ({aws.region}, бот-side — нет ноды с этим гео)"
-            ok, info = await send_via_ses(aws, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
+            via = f"SES {acc.region}, с бота — нет ноды с этим регионом"
+            ok, info = await send_via_ses(acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
     else:
-        smtp = await pick_smtp(group=payload["group"])
-        if smtp is None:
-            await say(f"🚫 Нет доступного SMTP для группы «{payload['group']}».")
-            return
+        smtp = acc
         from_disp = smtp.email
-        if node_id is not None:
-            with Session(_engine) as db:
-                node = db.get(Node, node_id)
-            if node is None:
-                await say("🚫 Нода не найдена.")
-                return
-            via = f"нода {node.login}@{node.ip}"
+        node = _first_node()
+        if node is not None:
+            via = f"SMTP через ноду {node.login}@{node.ip}"
             ok, info = await send_via_node(node, smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
         else:
+            via = "SMTP локально (активных нод нет)"
             ok, info = await mailer_svc.send_via_account(smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
 
-    if smtp is not None and ok:
+    if ok:
         try:
             with Session(_engine) as db:
-                acc = db.get(SmtpAccount, smtp.id)
-                if acc:
-                    acc.sent_count = (acc.sent_count or 0) + 1
-                    db.add(acc)
+                row = db.get(SmtpAccount if kind == "smtp" else AwsAccount, acc.id)
+                if row:
+                    row.sent_count = (row.sent_count or 0) + 1
+                    db.add(row)
                     db.commit()
         except Exception as e:
             log.warning("sent_count: %s", e)
@@ -310,21 +353,27 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
                 user_id=user_id, smtp_id=getattr(smtp, "id", None), email=payload["email"],
                 status="ok" if ok else "fail", error=None if ok else (info or "send failed"),
                 created_at=datetime.utcnow().isoformat(),
+                country=payload.get("country"), service=payload.get("service"),
+                mailbox=payload.get("mailbox"), short_provider=provider, track=track,
             ))
             db.commit()
     except Exception as e:
         log.warning("SendLog: %s", e)
 
-    head = "✅ Отправлено!" if ok else "❌ Ошибка при отправке."
+    sender = payload.get("sender")
+    frm = f"{sender} &lt;{from_disp}&gt;" if sender else from_disp
     lines = [
-        head,
-        f"• Рубрика: <b>{payload.get('rubric_name')}</b>",
-        f"• Кому: <code>{payload['email']}</code>",
-        f"• Откуда: {via}",
-        f"• От: <b>{payload.get('sender') or from_disp}</b> &lt;{from_disp}&gt;",
-        f"• Тема: {payload['subject']}",
-        f"• Ссылка: {short or '—'}",
+        "Отправлено" if ok else "❌ Ошибка при отправке",
+        "",
+        f"Сервис: {payload.get('service') or '—'}",
+        f"Рубрика: {payload.get('rubric_name')}",
+        f"Ссылка: {short or '—'}",
+        f"Кому: {payload['email']}",
+        f"От: {frm}",
     ]
-    if info:
-        lines.append(f"\n<code>{info}</code>")
+    # ответ провайдера (MessageId и т.п.) показываем только при ошибке
+    if not ok:
+        lines.append(f"Через: {via}")
+        if info:
+            lines.append(f"\n<code>{info}</code>")
     await say("\n".join(lines), reply_markup=_kb_result())

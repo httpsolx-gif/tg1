@@ -1,0 +1,16 @@
+[Unit]
+Description=TG mailer bot
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__PROJECT_DIR__/.venv/bin/python -m bot.main
+EnvironmentFile=-__PROJECT_DIR__/.env
+Restart=always
+RestartSec=3
+User=__RUN_USER__
+
+[Install]
+WantedBy=multi-user.target

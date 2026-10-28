@@ -17,3 +17,5 @@ class AwsAccount(SQLModel, table=True):
     node_id: int | None = Field(default=None, foreign_key="node.id")
     is_active: bool = True
     error_count: int = 0
+    send_limit: int = 0   # 0 = без лимита (как у SMTP)
+    sent_count: int = 0   # успешные отправки — для лимита/автосмены базы области

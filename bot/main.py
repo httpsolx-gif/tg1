@@ -9,6 +9,37 @@ from bot.app import build_dispatcher
 from sqlmodel import SQLModel
 from common.db import get_engine
 
+def _ensure_columns(engine):
+    """Идемпотентно добавить колонки, которых нет в create_all для уже существующих таблиц.
+
+    create_all не трогает существующие таблицы — новые столбцы на старых таблицах
+    добавляем вручную. Только Postgres (у sqlite-смоуков таблицы свежие из модели).
+    """
+    from sqlalchemy import text
+    if engine.dialect.name != "postgresql":
+        return
+    stmts = [
+        "ALTER TABLE node ADD COLUMN IF NOT EXISTS purpose varchar NOT NULL DEFAULT 'send'",
+        "ALTER TABLE short_domain ADD COLUMN IF NOT EXISTS registrar varchar",
+        "ALTER TABLE short_domain ADD COLUMN IF NOT EXISTS registrar_token_enc varchar",
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS country varchar",
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS service varchar",
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS mailbox varchar",
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS short_provider varchar",
+        "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS track varchar",
+        "CREATE INDEX IF NOT EXISTS ix_sendlog_track ON sendlog (track)",
+        # aws_account: лимит/счётчик для единой очереди SMTP+AWS области (п.30)
+        "ALTER TABLE aws_account ADD COLUMN IF NOT EXISTS send_limit integer NOT NULL DEFAULT 0",
+        "ALTER TABLE aws_account ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
+    ]
+    with engine.begin() as conn:
+        for s in stmts:
+            try:
+                conn.execute(text(s))
+            except Exception as e:
+                logging.getLogger("bot").warning("ensure column failed: %s (%s)", s, e)
+
+
 async def main():
     configure_logging(settings.BOT_TOKEN)
 
@@ -37,7 +68,10 @@ async def main():
     # Initialize database tables once at startup
     try:
         engine = get_engine()
+        # регистрируем модели, создаваемые через create_all (не в alembic)
+        import common.models.short_domain  # noqa: F401
         SQLModel.metadata.create_all(engine)
+        _ensure_columns(engine)
     except Exception as e:
         logging.getLogger("bot").error("DB init failed: %s", e)
 
@@ -45,6 +79,13 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
         logging.getLogger("bot").warning("delete_webhook error: %s", e)
+
+    # Авто-бэкап БД в Telegram-канал (если заданы BACKUP_CHANNEL_ID и BACKUP_EVERY_HOURS)
+    try:
+        from bot.services.backup import backup_loop
+        asyncio.create_task(backup_loop(bot))
+    except Exception as e:
+        logging.getLogger("bot").warning("backup loop not started: %s", e)
 
     logging.getLogger("bot").info("🚀 Bot started")
     await dp.start_polling(bot)

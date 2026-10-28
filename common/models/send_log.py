@@ -10,3 +10,9 @@ class SendLog(SQLModel, table=True):
     status: str  # ok|fail
     error: str | None = None
     created_at: str  # ISO for skeleton
+    # разрезы статистики (п.37)
+    country: str | None = None        # код страны отправки
+    service: str | None = None        # имя сервиса
+    mailbox: str | None = None        # тип почты (gmail/main/...)
+    short_provider: str | None = None # 'off'|'n9.cl'|'dom:{id}'
+    track: str | None = Field(default=None, index=True)  # id для привязки перехода (личные домены)

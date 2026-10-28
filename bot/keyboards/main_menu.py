@@ -2,11 +2,11 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="📤 Отправить письмо")],  # верхняя большая
+        [KeyboardButton(text="✉︎ Отправить письмо")],  # верхняя большая
     ]
-    bottom = [KeyboardButton(text="📋 Меню")]
+    bottom = [KeyboardButton(text="☰ Меню")]
     if is_admin:
-        bottom.append(KeyboardButton(text="🛠 Админка"))
+        bottom.append(KeyboardButton(text="⚙︎ Админка"))
     rows.append(bottom)
 
     return ReplyKeyboardMarkup(

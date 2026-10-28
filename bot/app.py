@@ -10,8 +10,12 @@ from bot.handlers.admin.short import router as short_router
 from bot.handlers.admin.nodes import router as nodes_router
 from bot.handlers.admin.tpl import router as tpl_router
 from bot.handlers.admin.rubrics import router as rubrics_router
+from bot.handlers.admin.scope_ops import router as scope_ops_router
+from bot.handlers.admin.short_domains import router as short_domains_router
+from bot.handlers.admin.stats import router as stats_router
+from bot.handlers.admin.backup import router as backup_router
+from bot.handlers.admin.test import router as test_router
 from bot.handlers.admin.mailtypes import router as mailtypes_router
-from bot.handlers.admin.aws import router as aws_router
 from bot.handlers.admin.smtp_limits import router as smtp_limits_router
 from bot.middlewares.error_report import ErrorReportMiddleware
 
@@ -30,7 +34,11 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(nodes_router)
     dp.include_router(tpl_router)
     dp.include_router(rubrics_router)
+    dp.include_router(scope_ops_router)
+    dp.include_router(short_domains_router)
+    dp.include_router(stats_router)
+    dp.include_router(backup_router)
+    dp.include_router(test_router)
     dp.include_router(mailtypes_router)
-    dp.include_router(aws_router)
     dp.include_router(smtp_limits_router)
     return dp

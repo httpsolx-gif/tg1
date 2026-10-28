@@ -27,9 +27,9 @@ except Exception:
         ("DE", "Germany", "🇩🇪"),
     ]
     _COUNTRY_SERVICES = {
-        "PL": ["olx.pl", "inpost.pl"],
-        "CZ": ["bazos.cz", "dpd.cz"],
-        "DE": ["ebay.de", "hermes.de"],
+        "PL": ["myemail.pl", "testshop.pl"],
+        "CZ": ["myemail.cz", "testshop.cz"],
+        "DE": ["myemail.de", "testshop.de"],
     }
 from typing import List, Tuple
 from typing import Optional
@@ -496,6 +496,9 @@ async def smtp_clear_unused(cq: CallbackQuery):
         if SmtpBinding is not None:
             for sid, in db.exec(select(SmtpBinding.smtp_id).where(SmtpBinding.smtp_id.is_not(None))).all():
                 bound_ids.add(int(sid))
+        # SMTP из баз областей (SRVS → Сервисы) тоже считаются используемыми
+        from common.models.scope import ScopeSmtp
+        bound_ids.update(int(x) for x in db.exec(select(ScopeSmtp.smtp_id)).all())
 
         # Кандидаты на удаление: активные, но без привязки и без отправок
         candidates = []

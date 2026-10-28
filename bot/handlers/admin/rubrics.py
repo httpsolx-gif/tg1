@@ -11,8 +11,7 @@ from common.db import get_engine
 from common.models.rubric import Rubric, RubricMailbox
 from common.models.service_config import ServiceRubricConfig
 from common.config import settings
-from bot.fsm.admin import RubricAdd, RubricEdit, ServiceCfgEdit
-from bot.services import mailboxes as mb
+from bot.fsm.admin import RubricAdd, RubricEdit, RubricMailboxAdd, ServiceCfgEdit
 try:
     from common.constants import COUNTRIES as _COUNTRIES, COUNTRY_FLAGS as _FLAGS, COUNTRY_SERVICES as _CSVC
 except Exception:  # pragma: no cover
@@ -22,24 +21,41 @@ router = Router(name="rubrics-admin")
 log = logging.getLogger("bot")
 _engine = get_engine()
 
-import re as _re
-_DOM_SPLIT = _re.compile(r"[\s,;]+")
+from html import escape as _esc
+
+
+def rubric_group(rub: dict) -> str:
+    """SMTP-группа/target рубрики для SMTP/SHORT: имя рубрики (gmail/main), иначе старое поле, иначе main."""
+    from bot.services.smtp_pool import SMTP_GROUPS
+    name = (rub.get("name") or "").strip().lower()
+    if name in SMTP_GROUPS:
+        return name
+    return rub.get("smtp_group") or "main"
+
+
+# Рубрика-«остальное»: ловит все домены, которых нет в почтах других рубрик
+OTHER_RUBRIC = "other"
+
+
+def _rubric_dict(r: Rubric) -> dict:
+    return {"id": r.id, "name": r.name, "smtp_group": r.smtp_group, "title": r.title, "sender_name": r.sender_name}
 
 
 def rubric_for_email(email: str) -> dict | None:
-    """По домену получателя вернуть настройки подходящей рубрики (или None)."""
+    """По домену получателя вернуть рубрику, в чьих почтах он есть; иначе рубрику «other» (или None)."""
     dom = (email or "").rsplit("@", 1)[-1].strip().lower()
     if not dom:
         return None
     from common.domains import domain_in
+    other = None
     with Session(_engine) as db:
         for r in db.exec(select(Rubric).order_by(Rubric.id)).all():
-            if domain_in(dom, r.domains or ""):
-                return {
-                    "id": r.id, "name": r.name, "smtp_group": r.smtp_group,
-                    "shortener": r.shortener, "title": r.title, "sender_name": r.sender_name,
-                }
-    return None
+            if (r.name or "").strip().lower() == OTHER_RUBRIC:
+                other = other or r
+            mbs = db.exec(select(RubricMailbox.mailbox).where(RubricMailbox.rubric_id == r.id)).all()
+            if domain_in(dom, " ".join(mbs)):
+                return _rubric_dict(r)
+        return _rubric_dict(other) if other else None
 
 
 # ---------- keyboards ----------
@@ -74,30 +90,19 @@ def _rubric_view(rid: int):
         if not r:
             return None, None
         mbs = db.exec(select(RubricMailbox).where(RubricMailbox.rubric_id == rid)).all()
-        boxes = ", ".join(m.mailbox for m in mbs) or "—"
-    doms = r.domains or "—"
+        boxes = _esc(", ".join(m.mailbox for m in mbs)) or "—"
+    catch_all = "• Сюда попадают ВСЕ домены, которых нет в почтах других рубрик.\n" \
+        if (r.name or "").strip().lower() == OTHER_RUBRIC else ""
     text = (
         f"🗂 <b>{r.name}</b>\n\n"
-        f"• Домены получателей: {doms}\n"
-        f"• Почты: {boxes}\n"
-        f"• Тайтл: {r.title or '—'}\n"
-        f"• Имя отправителя: {r.sender_name or '—'}\n"
-        f"• SMTP-группа: {r.smtp_group or '—'}\n"
-        f"• Сокращатель: {r.shortener or 'выкл'}"
+        f"• Почты: {boxes}\n{catch_all}\n"
+        f"<i>По почтам выбирается рубрика при отправке. SMTP и сокращатель — в разделах SMTP / SHORT, "
+        f"тайтл и имя отправителя — в «Сервисы».</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
+            InlineKeyboardButton(text="✉️ Почты", callback_data=f"rub:mb:{rid}"),
             InlineKeyboardButton(text="✏️ Название", callback_data=f"rub:setname:{rid}"),
-            InlineKeyboardButton(text="🌐 Домены", callback_data=f"rub:setdomains:{rid}"),
-        ],
-        [InlineKeyboardButton(text="✉️ Почты", callback_data=f"rub:mb:{rid}")],
-        [
-            InlineKeyboardButton(text=f"📮 SMTP: {r.smtp_group or '—'}", callback_data=f"rub:smtp:{rid}"),
-            InlineKeyboardButton(text=f"🔗 Сокр: {r.shortener or 'выкл'}", callback_data=f"rub:short:{rid}"),
-        ],
-        [
-            InlineKeyboardButton(text="🏷 Тайтл", callback_data=f"rub:settitle:{rid}"),
-            InlineKeyboardButton(text="👤 Имя", callback_data=f"rub:setsender:{rid}"),
         ],
         [InlineKeyboardButton(text="🗑 Удалить рубрику", callback_data=f"rub:del:{rid}")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="rub:root")],
@@ -108,19 +113,22 @@ def _rubric_view(rid: int):
 def _kb_mailboxes(rid: int) -> InlineKeyboardMarkup:
     with Session(_engine) as db:
         mbs = db.exec(select(RubricMailbox).where(RubricMailbox.rubric_id == rid)).all()
-    present = {m.mailbox: m.id for m in mbs}
     rows: List[List[InlineKeyboardButton]] = []
     for m in mbs:
         rows.append([InlineKeyboardButton(text=f"🗑 {m.mailbox}", callback_data=f"rub:mbdel:{rid}:{m.id}")])
-    # добавить недостающие
-    add_btns = [
-        InlineKeyboardButton(text=f"+ {name}", callback_data=f"rub:mbadd:{rid}:{code}")
-        for code, name in mb.pairs() if name not in present
-    ]
-    for i in range(0, len(add_btns), 3):
-        rows.append(add_btns[i:i + 3])
+    rows.append([InlineKeyboardButton(text="+ добавить", callback_data=f"rub:mbadd:{rid}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rub:open:{rid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def parse_mailbox_list(text: str) -> list[str]:
+    """`web, GMX ,gmail.com,,web` → ['web', 'gmx', 'gmail.com'] (порядок сохраняется)."""
+    out: list[str] = []
+    for part in (text or "").split(","):
+        v = part.strip().lower()
+        if v and v not in out:
+            out.append(v)
+    return out
 
 
 # ---------- entry ----------
@@ -249,27 +257,47 @@ async def rub_mailboxes(cq: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("rub:mbadd:"))
-async def rub_mailbox_add(cq: CallbackQuery):
+async def rub_mailbox_add(cq: CallbackQuery, state: FSMContext):
     if cq.from_user.id not in settings.admin_ids_set:
         await cq.answer("Нет доступа", show_alert=True)
         return
-    _, _, rid, code = cq.data.split(":", 3)
-    rid = int(rid)
-    name = mb.code_to_name().get(code)
-    if not name:
-        await cq.answer("Неизвестная почта", show_alert=True)
+    rid = int(cq.data.split(":")[2])
+    await state.set_state(RubricMailboxAdd.waiting)
+    await state.update_data(rid=rid)
+    await cq.message.answer(
+        "Отправьте почты одним сообщением через запятую — любые значения\n"
+        "(напр. <code>web, gmx, gmail.com, t-online</code>):"
+    )
+    await cq.answer()
+
+
+@router.message(RubricMailboxAdd.waiting, F.text)
+async def rub_mailbox_add_text(m: Message, state: FSMContext):
+    if m.from_user.id not in settings.admin_ids_set:
         return
+    rid = (await state.get_data()).get("rid")
+    values = parse_mailbox_list(m.text)
+    if not values:
+        await m.answer("Пусто. Отправьте почты через запятую (напр. <code>web, gmx</code>):")
+        return
+    await state.clear()
     with Session(_engine) as db:
-        exists = db.exec(
-            select(RubricMailbox).where(
-                (RubricMailbox.rubric_id == rid) & (RubricMailbox.mailbox == name)
-            )
-        ).first()
-        if not exists:
-            db.add(RubricMailbox(rubric_id=rid, mailbox=name))
-            db.commit()
-    await cq.answer(f"+ {name}")
-    await cq.message.edit_text("✉️ Почты рубрики (+ добавить / 🗑 убрать):", reply_markup=_kb_mailboxes(rid))
+        if not rid or not db.get(Rubric, rid):
+            await m.answer("Рубрика не найдена.")
+            return
+        present = {
+            x.mailbox.lower()
+            for x in db.exec(select(RubricMailbox).where(RubricMailbox.rubric_id == rid)).all()
+        }
+        added = [v for v in values if v not in present]
+        for v in added:
+            db.add(RubricMailbox(rubric_id=rid, mailbox=v))
+        db.commit()
+    skipped = len(values) - len(added)
+    msg = f"✅ Добавлено: {_esc(', '.join(added))}" if added else "Ничего нового не добавлено"
+    if skipped:
+        msg += f" (уже были: {skipped})"
+    await m.answer(f"{msg}\n\n✉️ Почты рубрики (+ добавить / 🗑 убрать):", reply_markup=_kb_mailboxes(rid))
 
 
 @router.callback_query(F.data.startswith("rub:mbdel:"))
@@ -288,84 +316,7 @@ async def rub_mailbox_del(cq: CallbackQuery):
     await cq.message.edit_text("✉️ Почты рубрики (+ добавить / 🗑 убрать):", reply_markup=_kb_mailboxes(rid))
 
 
-# ---------- bind smtp-group / shortener ----------
-def _kb_pick(rid: int, prefix: str, options: list[tuple[str, str]]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=label, callback_data=f"{prefix}:{rid}:{val}")] for label, val in options]
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rub:open:{rid}")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-@router.callback_query(F.data.startswith("rub:smtp:"))
-async def rub_smtp(cq: CallbackQuery):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    rid = int(cq.data.split(":")[-1])
-    # Только реальные SMTP-группы (gmail/main) — к ним привязаны SMTP-аккаунты.
-    from bot.services.smtp_pool import SMTP_GROUPS, SMTP_GROUP_LABELS
-    options = [(SMTP_GROUP_LABELS.get(g, g), g) for g in SMTP_GROUPS]
-    await cq.message.edit_text(
-        "📮 SMTP-группа рубрики (куда привязаны SMTP-аккаунты):",
-        reply_markup=_kb_pick(rid, "rub:smtpset", options),
-    )
-    await cq.answer()
-
-
-@router.callback_query(F.data.startswith("rub:smtpset:"))
-async def rub_smtp_set(cq: CallbackQuery):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    _, _, rid, val = cq.data.split(":", 3)
-    _set_field(int(rid), "smtp_group", val)
-    await _reopen(cq, int(rid))
-
-
-@router.callback_query(F.data.startswith("rub:short:"))
-async def rub_short(cq: CallbackQuery):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    rid = int(cq.data.split(":")[-1])
-    await cq.message.edit_text(
-        "🔗 Сокращатель рубрики:",
-        reply_markup=_kb_pick(rid, "rub:shortset", [("n9", "n9"), ("Выключить", "off")]),
-    )
-    await cq.answer()
-
-
-@router.callback_query(F.data.startswith("rub:shortset:"))
-async def rub_short_set(cq: CallbackQuery):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    _, _, rid, val = cq.data.split(":", 3)
-    _set_field(int(rid), "shortener", None if val == "off" else val)
-    await _reopen(cq, int(rid))
-
-
-def _set_field(rid: int, field: str, value) -> None:
-    with Session(_engine) as db:
-        r = db.get(Rubric, rid)
-        if r:
-            setattr(r, field, value)
-            db.add(r)
-            db.commit()
-
-
-async def _reopen(cq: CallbackQuery, rid: int) -> None:
-    text, kb = _rubric_view(rid)
-    if text is None:
-        await cq.answer("Рубрика не найдена", show_alert=True)
-        return
-    try:
-        await cq.message.edit_text(text, reply_markup=kb)
-    except Exception:
-        await cq.message.answer(text, reply_markup=kb)
-    await cq.answer("Сохранено")
-
-
-# ---------- edit title / sender ----------
+# ---------- edit name ----------
 @router.callback_query(F.data.startswith("rub:setname:"))
 async def rub_set_name(cq: CallbackQuery, state: FSMContext):
     if cq.from_user.id not in settings.admin_ids_set:
@@ -378,45 +329,6 @@ async def rub_set_name(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-@router.callback_query(F.data.startswith("rub:setdomains:"))
-async def rub_set_domains(cq: CallbackQuery, state: FSMContext):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    rid = int(cq.data.split(":")[-1])
-    await state.set_state(RubricEdit.value)
-    await state.update_data(field="domains", rid=rid)
-    await cq.message.answer(
-        "Введите домены получателей этой рубрики через пробел/запятую\n"
-        "(напр. <code>gmx.net gmx.de web.de</code>), или /clear чтобы очистить:"
-    )
-    await cq.answer()
-
-
-@router.callback_query(F.data.startswith("rub:settitle:"))
-async def rub_set_title(cq: CallbackQuery, state: FSMContext):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    rid = int(cq.data.split(":")[-1])
-    await state.set_state(RubricEdit.value)
-    await state.update_data(field="title", rid=rid)
-    await cq.message.answer("Введите тайтл (тему) для рубрики (или /clear чтобы очистить):")
-    await cq.answer()
-
-
-@router.callback_query(F.data.startswith("rub:setsender:"))
-async def rub_set_sender(cq: CallbackQuery, state: FSMContext):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    rid = int(cq.data.split(":")[-1])
-    await state.set_state(RubricEdit.value)
-    await state.update_data(field="sender_name", rid=rid)
-    await cq.message.answer("Введите имя отправителя для рубрики (или /clear чтобы очистить):")
-    await cq.answer()
-
-
 @router.message(RubricEdit.value, F.text)
 async def rub_edit_value(m: Message, state: FSMContext):
     if m.from_user.id not in settings.admin_ids_set:
@@ -425,7 +337,7 @@ async def rub_edit_value(m: Message, state: FSMContext):
     field = data.get("field")
     rid = data.get("rid")
     await state.clear()
-    if field not in {"title", "sender_name", "name", "domains"} or not rid:
+    if field != "name" or not rid:
         await m.answer("Что-то пошло не так, попробуйте заново.")
         return
     val = (m.text or "").strip()
@@ -496,7 +408,8 @@ def service_rubric_cfg(service: str, rubric_id: int, mailbox: str) -> dict | Non
 # ───────── страна → сервис → рубрика → почта → {имя, тайтл, шаблон} ─────────
 def _kb_countries() -> InlineKeyboardMarkup:
     btns = [InlineKeyboardButton(text=f"{_FLAGS.get(c, '')} {c}", callback_data=f"svc:c:{c}") for c in _COUNTRIES]
-    rows = [btns[i:i + 3] for i in range(0, len(btns), 3)]
+    rows = [[InlineKeyboardButton(text="🌐 ALL (все страны)", callback_data="sco:o:*:*:0")]]
+    rows += [btns[i:i + 3] for i in range(0, len(btns), 3)]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="srv:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -507,7 +420,10 @@ async def svc_root(cq: CallbackQuery, state: FSMContext):
         await cq.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    await cq.message.edit_text("🧩 Сервисы — выберите страну:", reply_markup=_kb_countries())
+    try:
+        await cq.message.edit_text("🧩 Сервисы — выберите страну:", reply_markup=_kb_countries())
+    except Exception:
+        await cq.message.answer("🧩 Сервисы — выберите страну:", reply_markup=_kb_countries())
     await cq.answer()
 
 
@@ -518,10 +434,14 @@ async def svc_country(cq: CallbackQuery):
         return
     code = cq.data.split(":")[-1]
     svcs = _CSVC.get(code, [])
-    rows = [[InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"svc:s:{code}:{s}")] for s in svcs] or \
-           [[InlineKeyboardButton(text="— нет сервисов —", callback_data="svc:root")]]
+    rows = [[InlineKeyboardButton(text=f"🌐 ALL (все сервисы {code})", callback_data=f"sco:o:{code}:*:0")]]
+    rows += [[InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"svc:s:{code}:{s}")] for s in svcs]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="svc:root")])
-    await cq.message.edit_text(f"🧩 {code} — выберите сервис:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    _kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await cq.message.edit_text(f"🧩 {code} — выберите сервис:", reply_markup=_kb)
+    except Exception:
+        await cq.message.answer(f"🧩 {code} — выберите сервис:", reply_markup=_kb)
     await cq.answer()
 
 
@@ -533,23 +453,30 @@ async def svc_service(cq: CallbackQuery):
     _, _, code, service = cq.data.split(":", 3)
     with Session(_engine) as db:
         rubrics = db.exec(select(Rubric).order_by(Rubric.id)).all()
-    rows = [[InlineKeyboardButton(text=f"🗂 {r.name}", callback_data=f"svc:r:{code}:{service}:{r.id}")] for r in rubrics] or \
-           [[InlineKeyboardButton(text="— нет рубрик —", callback_data="srv:root")]]
+    rows = [[InlineKeyboardButton(text="🌐 ALL (все рубрики)", callback_data=f"sco:o:{code}:{service}:0")]]
+    rows += [[InlineKeyboardButton(text=f"🗂 {r.name}", callback_data=f"svc:r:{code}:{service}:{r.id}")] for r in rubrics]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:c:{code}")])
-    await cq.message.edit_text(f"🧩 {service} — выберите рубрику:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    _kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await cq.message.edit_text(f"🧩 {service} — выберите рубрику:", reply_markup=_kb)
+    except Exception:
+        await cq.message.answer(f"🧩 {service} — выберите рубрику:", reply_markup=_kb)
     await cq.answer()
 
 
 @router.callback_query(F.data.startswith("svc:r:"))
-async def svc_rubric(cq: CallbackQuery):
+async def svc_rubric(cq: CallbackQuery, state: FSMContext):
     if cq.from_user.id not in settings.admin_ids_set:
         await cq.answer("Нет доступа", show_alert=True)
         return
+    await state.clear()
     _, _, code, service, rid = cq.data.split(":", 4)
-    rows = [[InlineKeyboardButton(text=f"✉️ {name}", callback_data=f"svc:m:{code}:{service}:{rid}:{name}")]
-            for name in mb.names()]
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:s:{code}:{service}")])
-    await cq.message.edit_text("🧩 Выберите почту:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    # Без выбора почты: настройка оверрайда сразу на всю рубрику (mailbox='')
+    text, kb = _svc_cfg_view(code, service, int(rid), "")
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=kb)
     await cq.answer()
 
 
@@ -568,33 +495,27 @@ def _svc_cfg_view(code: str, service: str, rid: int, mailbox: str):
     title = (cfg.title if cfg and cfg.title else None) or (r.title if r else None)
     tpl = "свой" if (cfg and cfg.template_html) else f"по рубрике ({service}-{(rname[:1] or '').lower()})"
     text = (
-        f"🧩 <b>{service}</b> × <b>{rname}</b> × <b>{mailbox}</b>\n\n"
+        f"🧩 <b>{service}</b> × <b>{rname}</b>  <i>(вся рубрика)</i>\n\n"
         f"• Имя отправителя: {sender or '—'}\n"
         f"• Тайтл: {title or '—'}\n"
         f"• Шаблон: {tpl}\n"
         f"<i>(пусто → дефолт рубрики)</i>"
     )
+    from bot.handlers.admin import scope_ops
+    from bot.services.scope import get_or_create
+    with Session(_engine) as db:
+        sid = get_or_create(db, code, service, rid).id
+    text += "\n\n" + scope_ops.ops_text(sid)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="👤 Имя", callback_data=f"svc:e:sn:{code}:{service}:{rid}:{mailbox}"),
             InlineKeyboardButton(text="🏷 Тайтл", callback_data=f"svc:e:st:{code}:{service}:{rid}:{mailbox}"),
         ],
         [InlineKeyboardButton(text="📄 Шаблон", callback_data=f"svc:e:tpl:{code}:{service}:{rid}:{mailbox}")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:r:{code}:{service}:{rid}")],
+        *scope_ops.ops_rows(sid),
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:s:{code}:{service}")],
     ])
     return text, kb
-
-
-@router.callback_query(F.data.startswith("svc:m:"))
-async def svc_mailbox(cq: CallbackQuery, state: FSMContext):
-    if cq.from_user.id not in settings.admin_ids_set:
-        await cq.answer("Нет доступа", show_alert=True)
-        return
-    await state.clear()
-    _, _, code, service, rid, mailbox = cq.data.split(":", 5)
-    text, kb = _svc_cfg_view(code, service, int(rid), mailbox)
-    await cq.message.edit_text(text, reply_markup=kb)
-    await cq.answer()
 
 
 _FIELD_PROMPT = {

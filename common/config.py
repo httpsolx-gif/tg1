@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     ERR_CHANNEL_ID: str = ""
     SEND_CHANNEL_ID: str = ""
 
+    # Бэкапы: канал для авто-дампов (бот должен быть админом) и период в часах (0 = выкл)
+    BACKUP_CHANNEL_ID: str = ""
+    BACKUP_EVERY_HOURS: int = 0
+
     DATABASE_URL: str = "sqlite:///./dev.db"
 
     LOG_LEVEL: str = "INFO"

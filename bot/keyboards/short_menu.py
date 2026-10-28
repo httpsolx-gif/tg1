@@ -8,7 +8,7 @@ try:
     _COUNTRIES: List[tuple[str, str]] = [(code, COUNTRY_FLAGS.get(code, "")) for code in COUNTRIES]
 except Exception:  # pragma: no cover
     _COUNTRIES = [("PL", "🇵🇱"), ("DE", "🇩🇪"), ("CZ", "🇨🇿")]
-    COUNTRY_SERVICES = {"PL": ["olx.pl"], "DE": ["ebay.de"], "CZ": ["bazos.cz"]}
+    COUNTRY_SERVICES = {"PL": ["myemail.pl"], "DE": ["myemail.de"], "CZ": ["myemail.cz"]}
 
 # Доступные сокращалки (провайдеры).
 SHORT_PROVIDERS: List[str] = ["n9.cl"]
@@ -31,6 +31,7 @@ def _chunk(items: List[InlineKeyboardButton], size: int) -> List[List[InlineKeyb
 def kb_short_root() -> InlineKeyboardMarkup:
     """Корень раздела Short. «Назад» выходит в админку."""
     return _mk([
+        [_btn("🌐 Личные домены", "sdom:list")],
         [_btn("⚙️ Settings", "short:settings")],
         [_btn("🧹 Clear", "short:clear")],
         [_btn("⬅️ Назад", "admin:back")],

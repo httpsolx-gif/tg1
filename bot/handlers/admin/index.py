@@ -7,7 +7,11 @@ from aiogram.exceptions import TelegramBadRequest
 from common.config import settings
 from bot.keyboards.admin_menu import admin_menu, admin_menu_inline, ADMIN_BUTTONS
 from bot.keyboards.main_menu import main_menu
-from bot.fsm.admin import SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit, MailboxAdd, AwsAdd, SmtpLimit
+from bot.fsm.admin import (
+    SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit,
+    RubricMailboxAdd, MailboxAdd, MailboxDomains, ScopeInput, SmtpLimit,
+    ServiceCfgEdit, ShortDomainAdd,
+)
 
 router = Router()
 log = logging.getLogger("bot")
@@ -19,7 +23,7 @@ MENU_TEXTS |= {txt for row in ADMIN_BUTTONS for txt in row}
 MENU_TEXTS |= {_strip(t) for t in set(MENU_TEXTS)}  # варианты без эмодзи (iconize reply-меню)
 
 # вход в админку (с главного меню)
-@router.message(F.text.in_({"🛠 Админка", "Админка"}))
+@router.message(F.text.func(lambda t: isinstance(t, str) and _strip(t) == "Админка"))
 async def admin_entry(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         await m.answer("⛔️ Нет доступа.")
@@ -33,10 +37,14 @@ async def admin_entry(m: Message):
     StateFilter(
         SmtpAdd.waiting_input, SmtpAutoAdd.waiting_input,
         NodeAdd.waiting_input, NodeAdd.waiting_region, NodeEdit.region,
-        TemplateUpload.waiting, RubricAdd.name, RubricEdit.value, MailboxAdd.waiting, AwsAdd.waiting,
+        TemplateUpload.waiting, RubricAdd.name, RubricEdit.value, RubricMailboxAdd.waiting, MailboxAdd.waiting,
+        MailboxDomains.waiting, ServiceCfgEdit.value,
+        ScopeInput.smtp, ScopeInput.limit,
         SmtpLimit.value,
+        ShortDomainAdd.domain, ShortDomainAdd.token, ShortDomainAdd.email,
+        ShortDomainAdd.registrar, ShortDomainAdd.node,
     ),
-    F.text.in_(MENU_TEXTS),
+    F.text.func(lambda t: isinstance(t, str) and _strip(t) in MENU_TEXTS),
 )
 async def cancel_add_on_menu(m: Message, state: FSMContext):
     await state.clear()
@@ -89,9 +97,11 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
     from bot.handlers.admin.smtp import kb_smtp_root
     from bot.keyboards.short_menu import kb_short_root
     from bot.handlers.admin.nodes import kb_nodes_root
-    from bot.handlers.admin.aws import kb_aws_root
     from bot.handlers.admin.tpl import kb_templates_root
     from bot.handlers.admin.rubrics import kb_srvs_root
+    from bot.handlers.admin.stats import kb_stats_root
+    from bot.handlers.admin.backup import kb_backup_root
+    from bot.handlers.admin.test import kb_test_root
 
     screens = {
         "smtp": ("SMTP — выберите действие:", kb_smtp_root),
@@ -99,6 +109,9 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         "nodes": ("🖥 NODES — ноды отправки:", kb_nodes_root),
         "templ": ("📑 TEMPLATES — шаблоны писем:", kb_templates_root),
         "srvs": ("🧩 SRVS:", kb_srvs_root),
+        "stats": ("📊 <b>STATS</b> — отправки / переходы / конверсия:", kb_stats_root),
+        "backup": ("💾 <b>BACKUP</b> — резервные копии и выгрузка БД:", kb_backup_root),
+        "test": ("🧪 <b>TEST</b> — проверки и удаление нерабочих:", kb_test_root),
     }
     if sec in screens:
         title, kb_fn = screens[sec]
@@ -111,10 +124,8 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
 
     # заглушки — просто текст + кнопка назад в админку
     stubs = {
-        "stats": "📊 STATS — общая/выборочно/user/период (подключим далее).",
         "users": "👥 USERS — подписки/блокировки/админки (подключим далее).",
         "api": "🛡 API — добавить/удалить/изменить токены (подключим далее).",
-        "test": "🧪 TEST — короткие проверки short/smtp/ноды (подключим далее).",
         "alert": "🚨 ALERT — настройки тревог/уведомлений (подключим далее).",
     }
     text = stubs.get(sec, "Раздел не найден.")
@@ -156,6 +167,13 @@ async def admin_stats(m: Message):
         return
     from bot.handlers.admin.stats import show_stats_root
     await show_stats_root(m)
+
+@router.message(F.text.in_({"💾 BACKUP", "BACKUP"}))
+async def admin_backup(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.backup import show_backup_root
+    await show_backup_root(m)
 
 @router.message(F.text.in_({"👥 USERS", "USERS"}))
 async def admin_users(m: Message):
@@ -205,10 +223,3 @@ async def admin_mailtypes(m: Message):
         return
     from bot.handlers.admin.mailtypes import show_mailtypes_root
     await show_mailtypes_root(m)
-
-@router.message(F.text.in_({"☁️ AWS", "AWS"}))
-async def admin_aws(m: Message):
-    if m.from_user.id not in settings.admin_ids_set:
-        return
-    from bot.handlers.admin.aws import show_aws_root
-    await show_aws_root(m)

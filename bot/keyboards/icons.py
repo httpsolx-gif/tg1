@@ -85,7 +85,8 @@ def strip_lead_emoji(text: str) -> str:
     """Убрать ведущий эмодзи-забег и пробел. 'SMTP' для '📧 SMTP'."""
     t = text or ""
     m = _EMOJI_RUN.match(t)
-    return t[len(m.group(1)):].lstrip() if m else t
+    # .lstrip VS15/VS16 first: ведущий глиф может нести text-presentation (✉︎/⚙︎)
+    return t[len(m.group(1)):].lstrip("︎️").lstrip() if m else t
 
 
 def _enabled() -> bool:

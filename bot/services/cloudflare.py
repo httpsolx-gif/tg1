@@ -1,0 +1,139 @@
+"""Минимальный async-клиент Cloudflare API v4 для личных short-доменов.
+
+Делает ровно то, что нужно флоу: создать зону, узнать NS/статус, включить
+SSL=Full(strict), выпустить origin-сертификат по CSR, создать проксированную
+A-запись. Токен — scoped API token (Bearer).
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+import aiohttp
+
+API = "https://api.cloudflare.com/client/v4"
+
+
+class CFError(RuntimeError):
+    pass
+
+
+async def _api(token: str, method: str, path: str, *, json: Optional[dict] = None,
+               timeout: int = 25) -> dict:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    url = API + path
+    to = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=to) as s:
+        async with s.request(method, url, headers=headers, json=json) as r:
+            try:
+                data = await r.json()
+            except Exception:
+                text = await r.text()
+                raise CFError(f"HTTP {r.status}: {text[:300]}")
+    if not data.get("success", False):
+        errs = data.get("errors") or []
+        msg = "; ".join(f"{e.get('code')}:{e.get('message')}" for e in errs) or str(data)[:300]
+        raise CFError(msg)
+    return data.get("result") or {}
+
+
+def _errcodes(e: CFError) -> set[int]:
+    out = set()
+    for part in str(e).split(";"):
+        part = part.strip()
+        if ":" in part and part.split(":", 1)[0].strip().isdigit():
+            out.add(int(part.split(":", 1)[0].strip()))
+    return out
+
+
+async def get_zone(token: str, name: str) -> Optional[dict]:
+    res = await _api(token, "GET", f"/zones?name={name}")
+    if isinstance(res, list):
+        return res[0] if res else None
+    return res or None
+
+
+async def create_zone(token: str, name: str) -> tuple[str, list[str]]:
+    """Создать зону (или вернуть существующую). → (zone_id, [nameservers])."""
+    try:
+        res = await _api(token, "POST", "/zones", json={"name": name, "type": "full"})
+    except CFError as e:
+        # 1061 — зона уже существует: подхватываем её
+        if 1061 in _errcodes(e):
+            z = await get_zone(token, name)
+            if not z:
+                raise
+            return z["id"], z.get("name_servers") or []
+        raise
+    return res["id"], res.get("name_servers") or []
+
+
+async def zone_status(token: str, zone_id: str) -> str:
+    res = await _api(token, "GET", f"/zones/{zone_id}")
+    return res.get("status", "unknown")
+
+
+async def activation_check(token: str, zone_id: str) -> None:
+    """Попросить CF немедленно перепроверить NS (ускоряет переход в active)."""
+    try:
+        await _api(token, "PUT", f"/zones/{zone_id}/activation_check")
+    except CFError:
+        pass  # не критично — CF и сам периодически проверяет
+
+
+async def set_ssl(token: str, zone_id: str, mode: str = "strict") -> None:
+    await _api(token, "PATCH", f"/zones/{zone_id}/settings/ssl", json={"value": mode})
+
+
+async def always_use_https(token: str, zone_id: str, on: bool = True) -> None:
+    await _api(token, "PATCH", f"/zones/{zone_id}/settings/always_use_https",
+               json={"value": "on" if on else "off"})
+
+
+async def create_origin_cert(token: str, hostnames: list[str], csr: str,
+                             validity_days: int = 5475) -> tuple[str, str]:
+    """Выпустить origin-сертификат по CSR. → (cert_pem, cert_id).
+
+    Требует у токена права SSL and Certificates. Приватный ключ не покидает ноду
+    (CSR сгенерирован там же).
+    """
+    res = await _api(token, "POST", "/certificates", json={
+        "hostnames": hostnames,
+        "requested_validity": validity_days,
+        "request_type": "origin-rsa",
+        "csr": csr,
+    })
+    return res["certificate"], res.get("id") or ""
+
+
+async def upsert_a_record(token: str, zone_id: str, name: str, ip: str,
+                          proxied: bool = True) -> str:
+    """Создать/обновить A-запись (ВСЕГДА проксированную). → record_id."""
+    existing = await _api(token, "GET", f"/zones/{zone_id}/dns_records?type=A&name={name}")
+    body = {"type": "A", "name": name, "content": ip, "proxied": proxied, "ttl": 1}
+    if isinstance(existing, list) and existing:
+        rid = existing[0]["id"]
+        await _api(token, "PUT", f"/zones/{zone_id}/dns_records/{rid}", json=body)
+        return rid
+    res = await _api(token, "POST", f"/zones/{zone_id}/dns_records", json=body)
+    return res["id"]
+
+
+async def verify_token(token: str) -> tuple[bool, str]:
+    """Проверить, что токен валиден (GET /user/tokens/verify)."""
+    try:
+        res = await _api(token, "GET", "/user/tokens/verify")
+        return True, res.get("status", "ok")
+    except CFError as e:
+        return False, str(e)
+
+
+async def cf_ip_ranges(timeout: int = 20) -> tuple[list[str], list[str]]:
+    """Диапазоны IP Cloudflare (v4, v6) — для фаервола origin. Без авторизации."""
+    to = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=to) as s:
+        async with s.get(f"{API}/ips") as r:
+            data = await r.json()
+    if not data.get("success"):
+        raise CFError("ips endpoint failed")
+    res = data["result"]
+    return res.get("ipv4_cidrs", []), res.get("ipv6_cidrs", [])

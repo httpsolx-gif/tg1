@@ -19,8 +19,9 @@ router = Router(name="templates-admin")
 log = logging.getLogger("bot")
 _engine = get_engine()
 
-# <service>-<код>.html  (service может содержать точки: olx.pl)
+# <service>-<код>.html  или  <service>.html  (service может содержать точки: olx.pl)
 _NAME_RE = re.compile(r"^(?P<service>.+)-(?P<code>[A-Za-z0-9]+)\.(?:html?|txt)$", re.IGNORECASE)
+_NAME_RE_PLAIN = re.compile(r"^(?P<service>.+)\.(?:html?|txt)$", re.IGNORECASE)
 
 
 # ---------- keyboards ----------
@@ -49,7 +50,7 @@ def _kb_list() -> InlineKeyboardMarkup:
     else:
         for t in items:
             rows.append([InlineKeyboardButton(
-                text=f"🗑 {t.service} · {t.mailbox}",
+                text=f"🗑 {t.service} · {t.mailbox or 'все'}",
                 callback_data=f"tpl:del:{t.id}",
             )])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="tpl:root")])
@@ -63,9 +64,11 @@ async def show_templates_root(m: Message):
     codes = ", ".join(f"{c}={n}" for c, n in mb.code_to_name().items())
     await m.answer(
         "📑 TEMPLATES — шаблоны писем.\n\n"
-        "Загрузка: просто кидайте <b>.html</b> файлы с именем <code>service-код.html</code>\n"
+        "Загрузка: просто кидайте <b>.html</b> файлы.\n"
+        "• <code>service.html</code> → общий шаблон сервиса (на все рубрики)\n"
+        "• <code>service-код.html</code> → только под эту почту/рубрику\n"
         f"Коды: {codes}\n"
-        "Пример: <code>olx.pl-g.html</code> → olx.pl / gmail.",
+        "Примеры: <code>myemail.pl.html</code> (все), <code>myemail.pl-g.html</code> (gmail).",
         reply_markup=kb_templates_root(),
     )
 
@@ -102,9 +105,10 @@ async def tpl_upload(cq: CallbackQuery, state: FSMContext):
     codes = ", ".join(f"{c}={n}" for c, n in mb.code_to_name().items())
     await cq.message.answer(
         "Кидайте <b>.html</b> файлы (можно по одному, подряд несколько).\n\n"
-        "Имя файла: <code>service-код.html</code>\n"
+        "• <code>service.html</code> — общий (на все рубрики)\n"
+        "• <code>service-код.html</code> — под конкретную почту/рубрику\n"
         f"Коды почт: {codes}\n"
-        "Напр.: <code>olx.pl-m.html</code>, <code>olx.pl-g.html</code>.",
+        "Напр.: <code>myemail.pl.html</code>, <code>myemail.pl-m.html</code>, <code>myemail.pl-g.html</code>.",
         reply_markup=_kb_upload(),
     )
     await state.set_state(TemplateUpload.waiting)
@@ -126,7 +130,7 @@ async def tpl_upload_doc(m: Message, state: FSMContext):
     html = content.read().decode("utf-8", errors="ignore")
     created = _upsert_template(service, mailbox, html, doc.file_name)
     verb = "добавлен" if created else "обновлён"
-    await m.answer(f"✅ <b>{service}</b> · {mailbox} — шаблон {verb}.", reply_markup=_kb_upload())
+    await m.answer(f"✅ <b>{service}</b> · {mailbox or 'все'} — шаблон {verb}.", reply_markup=_kb_upload())
 
 
 @router.message(TemplateUpload.waiting, F.text)
@@ -153,7 +157,7 @@ async def tpl_drop_any(m: Message):
     except ValueError as e:
         await m.answer(
             f"📄 <code>{name}</code> — имя не распознано: {e}\n"
-            "Формат: <code>service-код.html</code> (напр. <code>olx.pl-g.html</code>)."
+            "Формат: <code>service-код.html</code> (напр. <code>myemail.pl-g.html</code>)."
         )
         return
     file = await m.bot.get_file(doc.file_id)
@@ -161,7 +165,7 @@ async def tpl_drop_any(m: Message):
     html = content.read().decode("utf-8", errors="ignore")
     created = _upsert_template(service, mailbox, html, name)
     verb = "добавлен" if created else "обновлён"
-    await m.answer(f"✅ <b>{service}</b> · {mailbox} — шаблон {verb}.")
+    await m.answer(f"✅ <b>{service}</b> · {mailbox or 'все'} — шаблон {verb}.")
 
 
 # ---------- list / delete ----------
@@ -200,15 +204,22 @@ async def tpl_delete(cq: CallbackQuery):
 
 # ---------- helpers ----------
 def parse_template_filename(name: str) -> Tuple[str, str]:
-    """`olx.pl-s.html` → (service='olx.pl', code='s'). Код — первая буква имени рубрики."""
-    m = _NAME_RE.match((name or "").strip())
-    if not m:
-        raise ValueError("имя должно быть <code>service-код.html</code>")
-    service = m.group("service").strip()
-    code = m.group("code").strip().lower()
-    if not service or not code:
-        raise ValueError("пустой service/код")
-    return service, code  # код (буква рубрики) хранится как mailbox шаблона
+    """`olx.pl-g.html` → ('olx.pl', 'g') — шаблон под конкретную почту/рубрику
+    (код = тип почты g/m/h/o/y = первая буква имени рубрики).
+    `olx.pl.html` → ('olx.pl', '') — ОБЩИЙ шаблон сервиса (на все рубрики)."""
+    name = (name or "").strip()
+    m = _NAME_RE.match(name)
+    if m:
+        service = m.group("service").strip()
+        code = m.group("code").strip().lower()
+        if service and code:
+            return service, code  # код хранится как mailbox шаблона
+    m = _NAME_RE_PLAIN.match(name)
+    if m:
+        service = m.group("service").strip()
+        if service:
+            return service, ""  # '' = общий шаблон (на все рубрики)
+    raise ValueError("имя: <code>service.html</code> или <code>service-код.html</code>")
 
 
 def _upsert_template(service: str, mailbox: str, html: str, filename: str | None) -> bool:

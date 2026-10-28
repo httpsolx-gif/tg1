@@ -6,3 +6,9 @@ data.db
 logs/
 *.sqlite*
 .DS_Store
+
+# backups
+deploy/backups/
+
+# runtime logs
+*.log

@@ -20,14 +20,17 @@ _engine = get_engine()
 
 # ---------- keyboards ----------
 def kb_nodes_root() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="+ Add", callback_data="node:add"),
-            InlineKeyboardButton(text="📋 Список", callback_data="node:list"),
-        ],
-        [InlineKeyboardButton(text="☁️ AWS SES", callback_data="aws:root")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="node:back")],
-    ])
+    """Корень NODES = сразу список нод (в названии — IP), снизу Add/Назад."""
+    rows: List[List[InlineKeyboardButton]] = []
+    with Session(_engine) as db:
+        nodes = db.exec(select(Node).order_by(Node.id)).all()
+    for n in nodes:
+        mark = "🟢" if n.is_active else "🔴"
+        geo = f" · {n.region}" if n.region else ""
+        rows.append([InlineKeyboardButton(text=f"{mark} {n.ip}{geo}", callback_data=f"node:open:{n.id}")])
+    rows.append([InlineKeyboardButton(text="+ Добавить ноду", callback_data="node:add")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="node:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _kb_add_cancel() -> InlineKeyboardMarkup:
@@ -61,20 +64,24 @@ def _node_view(nid: int):
     if not n:
         return None, None
     mark = "🟢 включена" if n.is_active else "🔴 выключена"
+    _ROLE_RU = {"send": "отправка", "short": "сокращалка", "both": "отправка+сокращалка"}
+    purpose = n.purpose or "send"
     text = (
         f"🖥 <b>{n.login}@{n.ip}</b>\n\n"
+        f"• Роль: <b>{_ROLE_RU.get(purpose, purpose)}</b>\n"
         f"• Регион (гео AWS): <b>{n.region or '—'}</b>\n"
         f"• Статус: {mark}"
     )
     toggle = "🔴 Выключить" if n.is_active else "🟢 Включить"
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"🎛 Роль: {_ROLE_RU.get(purpose, purpose)}", callback_data=f"node:role:{nid}")],
         [InlineKeyboardButton(text=f"🌍 Регион: {n.region or '—'}", callback_data=f"node:region:{nid}")],
         [
             InlineKeyboardButton(text=toggle, callback_data=f"node:toggle:{nid}"),
             InlineKeyboardButton(text="🧪 Тест SSH", callback_data=f"node:test:{nid}"),
         ],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"node:del:{nid}")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="node:list")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="node:root")],
     ])
     return text, kb
 
@@ -83,7 +90,7 @@ def _node_view(nid: int):
 async def show_nodes_root(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
-    await m.answer("🖥 NODES — ноды отправки:", reply_markup=kb_nodes_root())
+    await m.answer("🖥 NODES — выберите ноду или добавьте:", reply_markup=kb_nodes_root())
 
 
 @router.callback_query(F.data == "node:root")
@@ -93,9 +100,9 @@ async def nodes_root_cb(cq: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     try:
-        await cq.message.edit_text("🖥 NODES — ноды отправки:", reply_markup=kb_nodes_root())
+        await cq.message.edit_text("🖥 NODES — выберите ноду или добавьте:", reply_markup=kb_nodes_root())
     except Exception:
-        await cq.message.answer("🖥 NODES — ноды отправки:", reply_markup=kb_nodes_root())
+        await cq.message.answer("🖥 NODES — выберите ноду или добавьте:", reply_markup=kb_nodes_root())
     await cq.answer()
 
 
@@ -179,6 +186,32 @@ async def node_toggle(cq: CallbackQuery):
     except Exception:
         pass
     await cq.answer(f"Нода {state_txt}")
+
+
+_ROLE_CYCLE = {"send": "short", "short": "both", "both": "send"}
+
+
+@router.callback_query(F.data.startswith("node:role:"))
+async def node_role(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    nid = int(cq.data.split(":")[-1])
+    with Session(_engine) as db:
+        n = db.get(Node, nid)
+        if not n:
+            await cq.answer("Нода не найдена", show_alert=True)
+            return
+        n.purpose = _ROLE_CYCLE.get(n.purpose or "send", "short")
+        db.add(n)
+        db.commit()
+        new = n.purpose
+    text, kb = _node_view(nid)
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cq.answer(f"Роль: {new}")
 
 
 @router.callback_query(F.data.startswith("node:region:"))

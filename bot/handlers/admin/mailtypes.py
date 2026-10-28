@@ -45,7 +45,7 @@ async def show_mailtypes_root(m: Message):
     codes = ", ".join(f"{c}={n}" for c, n in mb.pairs())
     await m.answer(
         "📮 ТИПЫ ПОЧТ (рубрики почт).\n\n"
-        "Используются в именах шаблонов (olx.pl-<b>код</b>.html), в почтах рубрик и как категория SMTP.\n\n"
+        "Используются в именах шаблонов (myemail.pl-<b>код</b>.html), в почтах рубрик и как категория SMTP.\n\n"
         f"Сейчас: {codes}",
         reply_markup=kb_root(),
     )
