@@ -111,7 +111,9 @@ Authorization: Bearer mk_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 - `country` + `service` — клиент выбирает из каталога (`GET /api/v1/catalog`); сервис
   также ∈ `allowed_services` токена.
 - `price` → плейсхолдер `*PRICE*` в шаблоне, `predmetname` → `*PNAME*` (сырые замены,
-  как `MAIL_URL` для ссылки).
+  как `MAIL_URL` для ссылки). `*DATE*` — **системный** плейсхолдер: текущая дата
+  `ДД.ММ.ГГГГ` **в часовом поясе страны** получателя (`COUNTRY_TZ`, zoneinfo — DST
+  учитывается), подставляется автоматически, клиент его НЕ передаёт.
 - `id`, `username` — **только в лог/трек** (`SendLog.ext_id`/`ext_username`), в письмо
   НЕ подставляются.
 

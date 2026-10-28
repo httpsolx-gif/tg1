@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+</head>
+<!--
+  Нейтральный тест-шаблон со ВСЕМИ переменными мейлера.
+  Плейсхолдеры (подставляются при отправке):
+    {{ title }} — тема письма
+    *PNAME*     — predmetname из API
+    *PRICE*     — price из API
+    *DATE*      — дата в поясе страны получателя (ставит система)
+    MAIL_URL    — ссылка из API (в href кнопки)
+  Таблично + инлайн-стили — чтобы корректно рендерилось в Gmail/Outlook.
+-->
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e6e8eb;">
+          <!-- header -->
+          <tr>
+            <td style="background:#1a1a2e;padding:22px 28px;">
+              <div style="color:#ffffff;font-size:18px;font-weight:bold;line-height:1.3;">{{ title }}</div>
+              <div style="color:#aeb4c2;font-size:12px;margin-top:6px;">*DATE*</div>
+            </td>
+          </tr>
+          <!-- body -->
+          <tr>
+            <td style="padding:28px;">
+              <div style="font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">Предмет</div>
+              <div style="font-size:22px;color:#111827;font-weight:bold;margin:6px 0 22px;">*PNAME*</div>
+
+              <div style="font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;">Стоимость</div>
+              <div style="font-size:30px;color:#111827;font-weight:bold;margin:6px 0 28px;">*PRICE*</div>
+
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="border-radius:8px;background:#2563eb;">
+                    <a href="MAIL_URL" style="display:inline-block;padding:14px 36px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;border-radius:8px;">Открыть</a>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="font-size:12px;color:#9aa1ad;margin-top:18px;word-break:break-all;">
+                Если кнопка не работает, откройте ссылку: <a href="MAIL_URL" style="color:#2563eb;">MAIL_URL</a>
+              </div>
+            </td>
+          </tr>
+          <!-- footer -->
+          <tr>
+            <td style="padding:16px 28px;background:#fafbfc;border-top:1px solid #eef0f2;">
+              <div style="color:#9aa1ad;font-size:12px;">Автоматическое уведомление · *DATE*</div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -87,6 +87,23 @@ async def resolve_short(link: str, provider: str, track: Optional[str] = None) -
     return await shorten_url(link)
 
 
+def _country_date(country: str | None, fmt: str = "%d.%m.%Y") -> str:
+    """Текущая дата в поясе страны получателя (IANA-зона из COUNTRY_TZ).
+
+    DST (переход на летнее/зимнее время) учитывается автоматически через zoneinfo,
+    поэтому дата не сбивается. Нет зоны/zoneinfo недоступен → локальная дата сервера.
+    """
+    from common.constants import COUNTRY_TZ
+    tzname = COUNTRY_TZ.get((country or "").upper())
+    if tzname:
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo(tzname)).strftime(fmt)
+        except Exception as e:
+            log.warning("tz %s unavailable (%s) — локальная дата", tzname, e)
+    return datetime.now().strftime(fmt)
+
+
 # ----------------------------- сборка payload -----------------------------
 def build_payload(
     *,
@@ -182,7 +199,11 @@ async def send_payload(
     provider = payload.get("short_provider") or "off"
     track = secrets.token_hex(6) if provider.startswith("dom:") else None
     short = await resolve_short(payload["link"], provider, track)
-    html = render_template(payload["template"], raw=payload.get("extra"),
+    # плейсхолдеры: от клиента (*PRICE*/*PNAME* в payload["extra"]) + системные.
+    # *DATE* — «чисто наше»: текущая дата в поясе страны получателя (DST учитывается).
+    raw = dict(payload.get("extra") or {})
+    raw["*DATE*"] = _country_date(payload.get("country"))
+    html = render_template(payload["template"], raw=raw,
                            title=payload["subject"], url=short)
 
     smtp = None

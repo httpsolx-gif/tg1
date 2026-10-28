@@ -208,6 +208,30 @@ COUNTRY_SERVICES = {
     "AR": [],
     # Добавляйте новые страны и правила фильтрации здесь
 }
+
+# --- Часовой пояс страны (IANA-зона) для плейсхолдера *DATE* ---
+# Берём ДАТУ в поясе страны получателя; переход на летнее/зимнее время (DST)
+# учитывается автоматически через zoneinfo (база tz), поэтому дата не сбивается.
+# Для стран с несколькими зонами (US/RU/BR/CA/AU) — основная бизнес-зона.
+COUNTRY_TZ = {
+    "PL": "Europe/Warsaw", "DE": "Europe/Berlin", "FR": "Europe/Paris",
+    "CZ": "Europe/Prague", "SK": "Europe/Bratislava", "HU": "Europe/Budapest",
+    "BG": "Europe/Sofia", "AT": "Europe/Vienna", "BE": "Europe/Brussels",
+    "CH": "Europe/Zurich", "NL": "Europe/Amsterdam", "SE": "Europe/Stockholm",
+    "FI": "Europe/Helsinki", "DK": "Europe/Copenhagen", "PT": "Europe/Lisbon",
+    "ES": "Europe/Madrid", "IT": "Europe/Rome", "NO": "Europe/Oslo",
+    "IE": "Europe/Dublin", "LT": "Europe/Vilnius", "LU": "Europe/Luxembourg",
+    "GR": "Europe/Athens", "EE": "Europe/Tallinn", "SI": "Europe/Ljubljana",
+    "HR": "Europe/Zagreb", "GB": "Europe/London", "RU": "Europe/Moscow",
+    "CN": "Asia/Shanghai", "IN": "Asia/Kolkata", "JP": "Asia/Tokyo",
+    "KR": "Asia/Seoul", "TW": "Asia/Taipei", "TH": "Asia/Bangkok",
+    "SG": "Asia/Singapore", "SA": "Asia/Riyadh", "AE": "Asia/Dubai",
+    "ZA": "Africa/Johannesburg", "NZ": "Pacific/Auckland",
+    "US": "America/New_York", "CA": "America/Toronto", "MX": "America/Mexico_City",
+    "BR": "America/Sao_Paulo", "AR": "America/Argentina/Buenos_Aires",
+    "AU": "Australia/Sydney",
+}
+
 # --- Почтовые провайдеры (mailbox-типы) и коды для имён файлов шаблонов ---
 # Имя файла шаблона: <service>-<код>.html  (напр. olx.pl-g.html → olx.pl / gmail)
 MAILBOXES = [
