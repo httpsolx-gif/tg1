@@ -13,14 +13,13 @@ import secrets
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel
 
 from api.auth import require_token
 from api import worker
 from bot.services import api_tokens as T
-from bot.services import idempotency
 
 router = APIRouter(prefix="/api/v1", tags=["send"])
 
@@ -70,13 +69,11 @@ async def catalog(tok=Depends(require_token("send"))):
 
 
 @router.post("/send")
-async def send(body: SendIn, tok=Depends(require_token("send")),
-               idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
-    # идемпотентность: повтор с тем же ключом (в рамках токена) → прежний ответ
-    if idempotency_key:
-        prev = idempotency.get(tok.id, idempotency_key)
-        if prev is not None:
-            return prev
+async def send(body: SendIn, tok=Depends(require_token("send"))):
+    # техработы (глобальный kill-switch приёма) → 503
+    from bot.services.api_flags import is_paused
+    if is_paused():
+        raise HTTPException(503, "service under maintenance")
 
     cat = _catalog()
     # страна/сервис — только из каталога и из разрешённых токену
@@ -98,6 +95,11 @@ async def send(body: SendIn, tok=Depends(require_token("send")),
     if not T.allows_link_domain(tok, domain):
         raise HTTPException(403, "link domain not allowed for token")
 
+    # адрес в стоп-листе (отписка/жалоба) → отдельная ошибка 409, не общий 422
+    from bot.services.suppression import is_suppressed
+    if is_suppressed(body.email.strip()):
+        raise HTTPException(409, "recipient is suppressed")
+
     # собрать payload (рубрика по домену получателя; клиент контент не задаёт)
     from bot.services.send_core import build_payload, SendError
     extra = {}
@@ -114,6 +116,14 @@ async def send(body: SendIn, tok=Depends(require_token("send")),
     except SendError as e:
         raise HTTPException(422, re.sub(r"<[^>]+>", "", str(e)))  # без HTML-разметки
 
+    # антидубль (наш серверный переключатель, НЕ клиентский): если включён и на этот
+    # email уже была успешная отправка за окно — повтор не шлём (решаем мы).
+    from bot.services.api_flags import is_dedup, DEDUP_HOURS
+    if is_dedup():
+        from bot.services.send_core import sent_recently
+        if sent_recently(body.email.strip(), DEDUP_HOURS):
+            return {"status": "duplicate", "id": None}
+
     # рейт + суточная квота (после валидации, до постановки в очередь)
     if not _rate_ok(tok.id, tok.rate_per_min):
         raise HTTPException(429, "rate limit exceeded")
@@ -128,7 +138,4 @@ async def send(body: SendIn, tok=Depends(require_token("send")),
     if not ok:
         T.consume_quota(tok.id, -1)  # вернуть квоту — в очередь не попало
         raise HTTPException(503, "queue full, try later")
-    resp = {"id": job_id, "status": "queued"}
-    if idempotency_key:
-        idempotency.save(tok.id, idempotency_key, resp)  # запомнить ответ под ключом
-    return resp
+    return {"id": job_id, "status": "queued"}

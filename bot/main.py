@@ -84,7 +84,6 @@ async def main():
         import common.models.api_token  # noqa: F401  (ApiToken — токены публичного API)
         import common.models.suppression  # noqa: F401  (Suppression — не слать на адрес)
         import common.models.api_audit  # noqa: F401  (ApiAudit — аудит вызовов API)
-        import common.models.idempotency  # noqa: F401  (IdemKey — идемпотентность /send)
         SQLModel.metadata.create_all(engine)
         _ensure_columns(engine)
     except Exception as e:

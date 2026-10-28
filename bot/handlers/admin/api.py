@@ -36,11 +36,33 @@ def _btn(t: str, cb: str) -> InlineKeyboardButton:
 
 
 # ----------------------------- корень -----------------------------
+def _paused() -> bool:
+    try:
+        from bot.services.api_flags import is_paused
+        return is_paused()
+    except Exception:
+        return False
+
+
+def _dedup() -> bool:
+    try:
+        from bot.services.api_flags import is_dedup
+        return is_dedup()
+    except Exception:
+        return False
+
+
 def kb_api_root() -> InlineKeyboardMarkup:
+    tgl = ("🔴 Техработы ВКЛ — вернуть приём" if _paused()
+           else "🛠 Включить техработы (стоп приёма)")
+    dd = ("🔁 Антидубль ВКЛ — разрешить дубли" if _dedup()
+          else "🔁 Включить антидубль (не слать повтор)")
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("➕ Создать токен", "api:new")],
         [_btn("📋 Список токенов", "api:list")],
         [_btn("🚫 Suppression", "api:supp"), _btn("🧾 Аудит", "api:audit")],
+        [_btn(tgl, "api:pause")],
+        [_btn(dd, "api:dedup")],
         [_btn("⬅️ Назад", "admin:back")],
     ])
 
@@ -58,7 +80,16 @@ _ROOT_TEXT = (
 async def show_api_root(m: Message):
     if not _admin(m.from_user.id):
         return
-    await m.answer(_ROOT_TEXT, reply_markup=kb_api_root())
+    await m.answer(_root_text(), reply_markup=kb_api_root())
+
+
+def _root_text() -> str:
+    lines = [_ROOT_TEXT]
+    if _paused():
+        lines.append("🔴 <b>Техработы ВКЛ</b> — приём отправки через API остановлен (503).")
+    if _dedup():
+        lines.append("🔁 <b>Антидубль ВКЛ</b> — повтор на тот же email в пределах 24ч не отправляется.")
+    return "\n\n".join(lines)
 
 
 @router.callback_query(F.data == "api:root")
@@ -68,10 +99,42 @@ async def api_root(cq: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     try:
-        await cq.message.edit_text(_ROOT_TEXT, reply_markup=kb_api_root())
+        await cq.message.edit_text(_root_text(), reply_markup=kb_api_root())
     except Exception:
-        await cq.message.answer(_ROOT_TEXT, reply_markup=kb_api_root())
+        await cq.message.answer(_root_text(), reply_markup=kb_api_root())
     await cq.answer()
+
+
+@router.callback_query(F.data == "api:pause")
+async def api_pause(cq: CallbackQuery, state: FSMContext):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    from bot.services.api_flags import is_paused, set_paused
+    new = not is_paused()
+    set_paused(new)
+    try:
+        await cq.message.edit_text(_root_text(), reply_markup=kb_api_root())
+    except Exception:
+        await cq.message.answer(_root_text(), reply_markup=kb_api_root())
+    await cq.answer("Техработы включены — приём остановлен" if new else "Приём возобновлён")
+
+
+@router.callback_query(F.data == "api:dedup")
+async def api_dedup(cq: CallbackQuery, state: FSMContext):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    from bot.services.api_flags import is_dedup, set_dedup
+    new = not is_dedup()
+    set_dedup(new)
+    try:
+        await cq.message.edit_text(_root_text(), reply_markup=kb_api_root())
+    except Exception:
+        await cq.message.answer(_root_text(), reply_markup=kb_api_root())
+    await cq.answer("Антидубль включён — повтор на тот же email не шлём" if new else "Антидубль выключен — дубли разрешены")
 
 
 # ----------------------------- создание -----------------------------

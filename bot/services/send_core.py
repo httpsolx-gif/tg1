@@ -87,6 +87,21 @@ async def resolve_short(link: str, provider: str, track: Optional[str] = None) -
     return await shorten_url(link)
 
 
+def sent_recently(email: str, within_hours: int = 24) -> bool:
+    """Была ли УСПЕШНАЯ отправка на этот email за последние within_hours (антидубль).
+    Учитываются все ok-отправки (бот+API). Сравнение ISO-дат лексикографическое."""
+    from datetime import timedelta
+    e = (email or "").strip().lower()
+    if not e:
+        return False
+    cutoff = (datetime.utcnow() - timedelta(hours=within_hours)).isoformat()
+    with Session(_engine) as db:
+        emails = db.exec(
+            select(SendLog.email).where((SendLog.status == "ok") & (SendLog.created_at >= cutoff))
+        ).all()
+    return any((x or "").strip().lower() == e for x in emails)
+
+
 def _country_date(country: str | None, fmt: str = "%d.%m.%Y") -> str:
     """Текущая дата в поясе страны получателя (IANA-зона из COUNTRY_TZ).
 
