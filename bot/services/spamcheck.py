@@ -351,7 +351,8 @@ def format_card(results: list[dict]) -> str:
 async def run_and_report(bot, *, post_empty: bool = False) -> tuple[list[dict], bool]:
     """Прогнать проверку и отправить карточку в SPAMCHECK_CHANNEL_ID. (results, posted)."""
     results = await run_once()
-    chan = (settings.SPAMCHECK_CHANNEL_ID or "").strip()
+    from common.tgids import norm_chat_id
+    chan = norm_chat_id(settings.SPAMCHECK_CHANNEL_ID)  # «100…» без «-» → «-100…»
     posted = False
     if chan and (results or post_empty):
         try:

@@ -328,7 +328,7 @@ def kb_targets() -> InlineKeyboardMarkup:
         warn = " ⚠️" if t.last_error else ""
         rows.append([
             InlineKeyboardButton(text=f"{mark} {name}{warn}", callback_data=f"bc:topen:{t.id}")])
-    rows.append([InlineKeyboardButton(text="+ Добавить группы", callback_data="bc:tadd")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить группы", callback_data="bc:tadd")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="bc:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

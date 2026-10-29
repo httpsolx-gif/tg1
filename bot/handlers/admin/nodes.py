@@ -39,7 +39,7 @@ def kb_nodes_root() -> InlineKeyboardMarkup:
         nodes = db.exec(select(Node).order_by(Node.id)).all()
     for n in nodes:
         rows.append([InlineKeyboardButton(text=f"{_mark(n)} {n.ip}{_tags(n)}", callback_data=f"node:open:{n.id}")])
-    rows.append([InlineKeyboardButton(text="+ Добавить ноду", callback_data="node:add")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить ноду", callback_data="node:add")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="node:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -61,7 +61,7 @@ def _kb_list() -> InlineKeyboardMarkup:
             rows.append([
                 InlineKeyboardButton(text=f"{_mark(n)} {n.login}@{n.ip}{_tags(n)}", callback_data=f"node:open:{n.id}"),
             ])
-    rows.append([InlineKeyboardButton(text="+ Добавить ноду", callback_data="node:add")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить ноду", callback_data="node:add")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="node:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

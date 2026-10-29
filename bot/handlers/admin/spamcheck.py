@@ -55,7 +55,7 @@ def kb_spamcheck_root() -> InlineKeyboardMarkup:
             text=f"{mark} {s.email} · {s.service}", callback_data=f"spam:open:{s.id}")])
     if not seeds:
         rows.append([InlineKeyboardButton(text="Пусто — добавьте ящики", callback_data="spam:add")])
-    rows.append([InlineKeyboardButton(text="+ Добавить ящики", callback_data="spam:add")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить ящики", callback_data="spam:add")])
     rows.append([
         InlineKeyboardButton(text="▶️ Проверить сейчас", callback_data="spam:run"),
         InlineKeyboardButton(text="📊 Последние", callback_data="spam:last"),

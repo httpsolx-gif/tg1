@@ -33,7 +33,7 @@ def kb_smtp_root() -> InlineKeyboardMarkup:
     # Add, Clear, Settings, Auto, Add auto, Clear auto, Forced change, Limit, Back
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="+ Add", callback_data="smtp:add"),
+            InlineKeyboardButton(text="➕ Add", callback_data="smtp:add"),
             InlineKeyboardButton(text="🧹 Clear", callback_data="smtp:clear"),
         ],
         [

@@ -20,8 +20,6 @@ router = Router(name="rubrics-admin")
 log = logging.getLogger("bot")
 _engine = get_engine()
 
-from html import escape as _esc
-
 
 def rubric_group(rub: dict) -> str:
     """SMTP-группа/target рубрики для SMTP/SHORT: имя рубрики (gmail/main), иначе старое поле, иначе main."""
@@ -123,7 +121,7 @@ def kb_rubrics_root() -> InlineKeyboardMarkup:
         rubrics = db.exec(select(Rubric).order_by(Rubric.id)).all()
     for r in rubrics:
         rows.append([InlineKeyboardButton(text=f"🗂 {r.name}", callback_data=f"rub:open:{r.id}")])
-    rows.append([InlineKeyboardButton(text="+ Добавить рубрику", callback_data="rub:add")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить рубрику", callback_data="rub:add")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="srv:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -188,7 +186,7 @@ def _kb_mailboxes(rid: int) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
     for m in mbs:
         rows.append([InlineKeyboardButton(text=f"🗑 {m.mailbox}", callback_data=f"rub:mbdel:{rid}:{m.id}")])
-    rows.append([InlineKeyboardButton(text="+ добавить", callback_data=f"rub:mbadd:{rid}")])
+    rows.append([InlineKeyboardButton(text="➕ добавить", callback_data=f"rub:mbadd:{rid}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rub:open:{rid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -471,21 +469,41 @@ async def srv_root(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-def service_rubric_cfg(service: str, rubric_id: int, mailbox: str) -> dict | None:
-    """Конфиг (sender/title/template) для (сервис, рубрика, почта). Сначала точная
-    почта, затем любая (mailbox='')."""
+_CFG_FIELDS = ("sender_name", "title", "template_html")
+
+
+def _cfg_row(db: Session, service: str, rid: int | None, mailbox: str):
+    """Строка оверрайда; rid 0/None = ALL рубрик сервиса (rubric_id IS NULL)."""
+    rcond = (ServiceRubricConfig.rubric_id == rid) if rid else (ServiceRubricConfig.rubric_id == None)  # noqa: E711
+    return db.exec(select(ServiceRubricConfig).where(
+        (ServiceRubricConfig.service == service) & rcond & (ServiceRubricConfig.mailbox == mailbox)
+    )).first()
+
+
+def service_cfg_layers(service: str, rubric_id: int | None, mailbox: str) -> dict:
+    """{поле: (значение, источник)} — источник 'rubric' | 'all'; поле без значения отсутствует.
+
+    Порядок по КАЖДОМУ полю: рубрика (точная почта → любая) → ALL рубрик (точная → любая).
+    Раньше бралась первая найденная строка целиком, и пустое поле в ней не добиралось ниже.
+    """
+    out: dict = {}
+    layers = ([(rubric_id, mailbox, "rubric"), (rubric_id, "", "rubric")] if rubric_id else []) \
+        + [(None, mailbox, "all"), (None, "", "all")]
     with Session(_engine) as db:
-        for mb_key in (mailbox, ""):
-            c = db.exec(
-                select(ServiceRubricConfig).where(
-                    (ServiceRubricConfig.service == service)
-                    & (ServiceRubricConfig.rubric_id == rubric_id)
-                    & (ServiceRubricConfig.mailbox == mb_key)
-                )
-            ).first()
-            if c:
-                return {"sender_name": c.sender_name, "title": c.title, "template_html": c.template_html}
-    return None
+        for rid, mb, src in layers:
+            c = _cfg_row(db, service, rid, mb)
+            if not c:
+                continue
+            for f in _CFG_FIELDS:
+                if f not in out and getattr(c, f):
+                    out[f] = (getattr(c, f), src)
+    return out
+
+
+def service_rubric_cfg(service: str, rubric_id: int, mailbox: str) -> dict | None:
+    """Конфиг (sender/title/template) для отправки: рубрика → ALL рубрик сервиса (по полям)."""
+    layers = service_cfg_layers(service, rubric_id, mailbox)
+    return {f: v for f, (v, _src) in layers.items()} or None
 
 
 # ───────── страна → сервис → рубрика → почта → {имя, тайтл, шаблон} ─────────
@@ -579,26 +597,85 @@ async def svc_rubric(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-def _svc_cfg_view(code: str, service: str, rid: int, mailbox: str):
+def set_template(service: str, rid: int, html: str, name: str | None) -> None:
+    """Поставить шаблон рубрике сервиса (rid=0 — ALL рубрик). п.65"""
     with Session(_engine) as db:
-        r = db.get(Rubric, rid)
-        cfg = db.exec(
-            select(ServiceRubricConfig).where(
-                (ServiceRubricConfig.service == service)
-                & (ServiceRubricConfig.rubric_id == rid)
-                & (ServiceRubricConfig.mailbox == mailbox)
-            )
-        ).first()
-    rname = r.name if r else "?"
-    sender = (cfg.sender_name if cfg and cfg.sender_name else None) or (r.sender_name if r else None)
-    title = (cfg.title if cfg and cfg.title else None) or (r.title if r else None)
-    tpl = "свой" if (cfg and cfg.template_html) else f"по рубрике ({service}-{(rname[:1] or '').lower()})"
+        cfg = _cfg_row(db, service, rid, "")
+        if not cfg:
+            cfg = ServiceRubricConfig(service=service, rubric_id=rid or None, mailbox="")
+        cfg.template_html = html
+        cfg.template_name = name
+        db.add(cfg)
+        db.commit()
+
+
+def clear_template(service: str, rid: int) -> bool:
+    with Session(_engine) as db:
+        cfg = _cfg_row(db, service, rid, "")
+        if not cfg or not cfg.template_html:
+            return False
+        cfg.template_html = None
+        cfg.template_name = None
+        db.add(cfg)
+        db.commit()
+        return True
+
+
+def _own_template_name(service: str, rid: int) -> str | None:
+    """Имя файла шаблона, заданного именно на этом уровне (рубрика или ALL), иначе None."""
+    with Session(_engine) as db:
+        cfg = _cfg_row(db, service, rid, "")
+        if cfg and cfg.template_html:
+            return cfg.template_name or "без имени"
+    return None
+
+
+def _tpl_file_info(service: str, code: str | None, lay: dict, rid: int = 0) -> str:
+    """Какой шаблон уйдёт. Ставится кидком .html в чат + галочки рубрик (п.65)."""
+    from bot.services.templates import resolve_template_html
+    if "template_html" in lay:
+        src = lay["template_html"][1]
+        # имя берём с того уровня, откуда шаблон пришёл (рубрика или ALL)
+        name = _own_template_name(service, rid if src == "rubric" else 0) or "без имени"
+        return f"<code>{_esc(name)}</code>" + (" <i>(из ALL)</i>" if src == "all" and rid else "")
+    s = _esc(service)
+    # старая библиотека файлов (сервис-буква.html / сервис.html) — пока действует как фолбэк
+    if code is not None and resolve_template_html(service, code) is not None:
+        return f"<code>{s}-{code}.html</code> <i>(старая загрузка)</i>"
+    if resolve_template_html(service, "") is not None:
+        return f"<code>{s}.html</code> <i>(общий, старая загрузка)</i>"
+    return "стандартный — киньте .html в чат и отметьте рубрики"
+
+
+def _svc_cfg_view(code: str, service: str, rid: int, mailbox: str):
+    """Карточка сервиса: имя/тайтл/шаблон + ops области. rid=0 — ALL рубрик сервиса."""
+    with Session(_engine) as db:
+        r = db.get(Rubric, rid) if rid else None
+    lay = service_cfg_layers(service, rid or None, mailbox)
+    if rid:
+        rname = r.name if r else "?"
+        defaults = {"sender_name": r.sender_name if r else None, "title": r.title if r else None}
+
+        def show(f: str) -> str:
+            if f in lay:
+                v, src = lay[f]
+                return _esc(v) + (" <i>(из ALL)</i>" if src == "all" else "")
+            return (_esc(defaults[f]) + " <i>(рубрики)</i>") if defaults.get(f) else "—"
+        tpl = _tpl_file_info(service, (rname[:1] or "").lower(), lay, rid)
+        head = f"🧩 <b>{_esc(service)}</b> × <b>{_esc(rname)}</b>  <i>(вся рубрика)</i>"
+        foot = "<i>(пусто → ALL сервиса → дефолт рубрики)</i>"
+    else:
+        def show(f: str) -> str:
+            return _esc(lay[f][0]) if f in lay else "— <i>(у каждой рубрики своё)</i>"
+        tpl = _tpl_file_info(service, None, lay, 0)
+        head = f"🧩 <b>{_esc(code)} · {_esc(service)}</b> × <b>ALL</b>  <i>(все рубрики)</i>"
+        foot = "<i>Действует на все рубрики сервиса; рубрика со своим значением его перекрывает.</i>"
     text = (
-        f"🧩 <b>{service}</b> × <b>{rname}</b>  <i>(вся рубрика)</i>\n\n"
-        f"• Имя отправителя: {sender or '—'}\n"
-        f"• Тайтл: {title or '—'}\n"
+        f"{head}\n\n"
+        f"• Имя отправителя: {show('sender_name')}\n"
+        f"• Тайтл: {show('title')}\n"
         f"• Шаблон: {tpl}\n"
-        f"<i>(пусто → дефолт рубрики)</i>"
+        f"{foot}"
     )
     from bot.handlers.admin import scope_ops
     from bot.services.scope import get_or_create
@@ -610,7 +687,8 @@ def _svc_cfg_view(code: str, service: str, rid: int, mailbox: str):
             InlineKeyboardButton(text="👤 Имя", callback_data=f"svc:e:sn:{code}:{service}:{rid}:{mailbox}"),
             InlineKeyboardButton(text="🏷 Тайтл", callback_data=f"svc:e:st:{code}:{service}:{rid}:{mailbox}"),
         ],
-        [InlineKeyboardButton(text="📄 Шаблон", callback_data=f"svc:e:tpl:{code}:{service}:{rid}:{mailbox}")],
+        *([[InlineKeyboardButton(text="🗑 Шаблон", callback_data=f"svc:tpldel:{code}:{service}:{rid}")]]
+          if _own_template_name(service, rid) else []),
         *scope_ops.ops_rows(sid),
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:s:{code}:{service}")],
     ])
@@ -620,8 +698,7 @@ def _svc_cfg_view(code: str, service: str, rid: int, mailbox: str):
 _FIELD_PROMPT = {
     "sn": ("sender_name", "Введите имя отправителя (или /clear):"),
     "st": ("title", "Введите тайтл (или /clear):"),
-    "tpl": ("template_html", "Пришлите HTML-шаблон текстом или файлом (/clear — по рубрике):"),
-}
+}  # шаблон — только файлом в чат (п.64), отдельного ввода HTML здесь нет
 
 
 @router.callback_query(F.data.startswith("svc:e:"))
@@ -630,6 +707,9 @@ async def svc_edit(cq: CallbackQuery, state: FSMContext):
         await cq.answer("Нет доступа", show_alert=True)
         return
     _, _, fkey, code, service, rid, mailbox = cq.data.split(":", 6)
+    if fkey not in _FIELD_PROMPT:  # старая кнопка «📄 Шаблон» в истории чата
+        await cq.answer("Шаблон — просто киньте файл в чат: сервис-буква.html или сервис.html", show_alert=True)
+        return
     field, prompt = _FIELD_PROMPT[fkey]
     await state.set_state(ServiceCfgEdit.value)
     await state.update_data(field=field, code=code, service=service, rid=int(rid), mailbox=mailbox)
@@ -639,15 +719,9 @@ async def svc_edit(cq: CallbackQuery, state: FSMContext):
 
 def _save_cfg(service, rid, mailbox, field, val):
     with Session(_engine) as db:
-        cfg = db.exec(
-            select(ServiceRubricConfig).where(
-                (ServiceRubricConfig.service == service)
-                & (ServiceRubricConfig.rubric_id == rid)
-                & (ServiceRubricConfig.mailbox == mailbox)
-            )
-        ).first()
+        cfg = _cfg_row(db, service, rid, mailbox)
         if not cfg:
-            cfg = ServiceRubricConfig(service=service, rubric_id=rid, mailbox=mailbox)
+            cfg = ServiceRubricConfig(service=service, rubric_id=rid or None, mailbox=mailbox)
         setattr(cfg, field, val)
         db.add(cfg)
         db.commit()
@@ -661,7 +735,7 @@ async def svc_cfg_text(m: Message, state: FSMContext):
     await state.clear()
     field = data.get("field"); service = data.get("service"); rid = data.get("rid")
     mailbox = data.get("mailbox", ""); code = data.get("code", "")
-    if field not in {"sender_name", "title", "template_html"} or not service or not rid:
+    if field not in {"sender_name", "title"} or not service or rid is None:
         await m.answer("Что-то пошло не так.")
         return
     val = (m.text or "").strip()
@@ -673,22 +747,26 @@ async def svc_cfg_text(m: Message, state: FSMContext):
 
 
 @router.message(ServiceCfgEdit.value, F.document)
-async def svc_cfg_doc(m: Message, state: FSMContext):
+async def svc_cfg_doc(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
-    data = await state.get_data()
-    if data.get("field") != "template_html":
-        await m.answer("Здесь ждут текст. Шаблон можно файлом только на шаге «Шаблон».")
+    await m.answer("Здесь ждут текст (имя/тайтл). Шаблон — киньте файл в чат вне ввода: "
+                   "<code>сервис-буква.html</code> или <code>сервис.html</code>.")
+
+
+@router.callback_query(F.data.startswith("svc:tpldel:"))
+async def svc_tpl_del(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
         return
-    await state.clear()
-    service = data.get("service"); rid = data.get("rid"); mailbox = data.get("mailbox", ""); code = data.get("code", "")
-    doc = m.document
-    file = await m.bot.get_file(doc.file_id)
-    content = await m.bot.download_file(file.file_path)
-    html = content.read().decode("utf-8", errors="ignore")
-    _save_cfg(service, rid, mailbox, "template_html", html)
-    text, kb = _svc_cfg_view(code, service, rid, mailbox)
-    await m.answer(f"✅ Шаблон сохранён.\n\n{text}", reply_markup=kb)
+    _, _, code, service, rid = cq.data.split(":", 4)
+    ok = clear_template(service, int(rid))
+    text, kb = _svc_cfg_view(code, service, int(rid), "")
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cq.answer("Шаблон убран" if ok else "Шаблона уже нет")
 
 
 # ═══════════ 🧩 Сервисы: добавление/удаление стран и сервисов (п.61) ═══════════

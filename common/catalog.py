@@ -3,8 +3,8 @@ SMTP, SHORT, API и спам-проверки.
 
 Таблицы: `country` (code, flag, sort) и `service` (name, slug, country, active).
 Управляется из админки: 🧩 SRVS → Сервисы (➕ страна / ➕ сервис / 🗑).
-Пустые таблицы при первом обращении засеиваются из common/constants.py
-(COUNTRIES + COUNTRY_SERVICES) — дальше константы не используются.
+Первый запуск: каталог засеивается из common/constants.py (только страны с сервисами),
+дальше константы не используются — список целиком в руках админки.
 
 Чтения не кэшируются: таблицы маленькие, а у бота и API — разные процессы,
 кэш разъехался бы после правки из админки.
@@ -20,9 +20,11 @@ from sqlmodel import Session, SQLModel, select
 from common.db import get_engine
 from common.models.country import Country
 from common.models.service import Service
+from common.models.appstate import AppState
 
 _engine = get_engine()
 _seeded = False
+_SEED_KEY = "catalog_seeded"
 
 # Сервис — домен-подобное имя: латиница/цифры/точка/дефис. Длина ограничена, чтобы
 # callback_data вида «sco:o:{CC}:{service}:{rubric_id}» влезала в лимит Telegram 64 байта.
@@ -40,20 +42,31 @@ def flag_for(code: str) -> str:
 
 
 def ensure_seeded() -> None:
-    """Засеять каталог из констант, если таблицы пустые (один раз на процесс)."""
+    """Засеять каталог из констант ОДИН раз за жизнь базы (метка в app_state).
+
+    Сеются только страны, у которых есть сервисы. Метка нужна, чтобы удалённые
+    из админки страны/сервисы не возвращались после рестарта (даже если удалить всё).
+    """
     global _seeded
     if _seeded:
         return
-    SQLModel.metadata.create_all(_engine, tables=[Country.__table__, Service.__table__])
+    SQLModel.metadata.create_all(_engine, tables=[Country.__table__, Service.__table__, AppState.__table__])
     with Session(_engine) as db:
-        if db.exec(select(Country)).first() is None:
-            from common.constants import COUNTRIES, COUNTRY_FLAGS, COUNTRY_SERVICES
-            for i, code in enumerate(COUNTRIES):
-                db.add(Country(code=code, flag=COUNTRY_FLAGS.get(code) or flag_for(code), sort=i))
-            if db.exec(select(Service)).first() is None:
+        if db.get(AppState, _SEED_KEY) is None:
+            if db.exec(select(Country)).first() is None:
+                from common.constants import COUNTRIES, COUNTRY_FLAGS, COUNTRY_SERVICES
+                have_services = db.exec(select(Service)).first() is not None
+                i = 0
                 for code in COUNTRIES:
-                    for name in COUNTRY_SERVICES.get(code) or []:
-                        db.add(Service(name=name, slug=name, country=code, active=True))
+                    svcs = COUNTRY_SERVICES.get(code) or []
+                    if not svcs:
+                        continue
+                    db.add(Country(code=code, flag=COUNTRY_FLAGS.get(code) or flag_for(code), sort=i))
+                    i += 1
+                    if not have_services:
+                        for name in svcs:
+                            db.add(Service(name=name, slug=name, country=code, active=True))
+            db.add(AppState(key=_SEED_KEY, value="1"))
             try:
                 db.commit()
             except IntegrityError:  # бот и API засеивали одновременно — второй просто опоздал

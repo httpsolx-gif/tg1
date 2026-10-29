@@ -17,7 +17,7 @@ log = logging.getLogger("bot")
 def kb_root() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="+ Добавить", callback_data="mb:add"),
+            InlineKeyboardButton(text="➕ Добавить", callback_data="mb:add"),
             InlineKeyboardButton(text="📋 Список", callback_data="mb:list"),
         ],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="mb:back")],

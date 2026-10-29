@@ -38,6 +38,10 @@ def _ensure_columns(engine):
         "ALTER TABLE scope_cfg ADD COLUMN IF NOT EXISTS wrap boolean NOT NULL DEFAULT false",
         "ALTER TABLE scope_smtp ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
         "ALTER TABLE scope_aws ADD COLUMN IF NOT EXISTS sent_count integer NOT NULL DEFAULT 0",
+        # имя/тайтл/шаблон на ALL рубрик сервиса (п.62): rubric_id NULL = все рубрики
+        "ALTER TABLE service_rubric_config ALTER COLUMN rubric_id DROP NOT NULL",
+        # имя файла шаблона, поставленного кидком файла с выбором рубрик (п.65)
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS template_name varchar",
         # API-отправки (п.46): привязка SendLog к токену + данные клиента (id/username)
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS api_token_id integer",
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS ext_id varchar",

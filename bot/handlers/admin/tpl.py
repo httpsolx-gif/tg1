@@ -1,4 +1,5 @@
 import logging
+from html import escape
 import re
 from datetime import datetime
 from typing import List, Tuple
@@ -12,7 +13,7 @@ from sqlmodel import Session, select
 from common.db import get_engine
 from common.models.template import EmailTemplate
 from common.config import settings
-from bot.fsm.admin import TemplateUpload
+from bot.fsm.admin import TemplateUpload, TemplateAssign
 from bot.services import mailboxes as mb
 
 router = Router(name="templates-admin")
@@ -140,32 +141,157 @@ async def tpl_upload_hint(m: Message):
     await m.answer("Пришлите <b>.html</b> файл, либо нажмите «Готово».", reply_markup=_kb_upload())
 
 
-# Загрузка шаблона «просто кидком» — без кнопок и без входа в режим.
-# Срабатывает, когда нет активного FSM-состояния (чтобы не перехватывать .txt
-# для SMTP/нод/AWS, которые ждут файл в своих состояниях).
-@router.message(StateFilter(None), F.document)
-async def tpl_drop_any(m: Message):
+# ---------- кидок .html → сервис по имени → галочки рубрик (п.65) ----------
+# Срабатывает без активного FSM (не перехватывает .txt для SMTP/нод, которые ждут файл
+# в своих состояниях) и в режиме выбора рубрик (новый файл заменяет ожидающий).
+_TPL_EXT = (".html", ".htm", ".txt")
+
+
+def detect_service(filename: str) -> tuple[str | None, str, bool]:
+    """Имя файла → (сервис, хвост после «сервис-», есть_в_каталоге).
+
+    Сначала ищем самый длинный сервис каталога, с которого начинается имя
+    (`testshop.de.html`, `testshop.de-s.html`, `testshop.de-promo.html`), иначе
+    старый разбор `service[-код].html`.
+    """
+    name = (filename or "").strip()
+    low = name.lower()
+    base = low
+    for ext in _TPL_EXT:
+        if base.endswith(ext):
+            base = base[: -len(ext)]
+            break
+    from common import catalog
+    known = sorted({s for svcs in catalog.country_services().values() for s in svcs}, key=len, reverse=True)
+    for svc in known:
+        if base == svc:
+            return svc, "", True
+        if base.startswith(svc + "-") or base.startswith(svc + "_"):
+            return svc, base[len(svc) + 1:], True
+    try:
+        svc, code = parse_template_filename(name)
+        return svc.lower(), code, False
+    except ValueError:
+        return None, "", False
+
+
+def _rubrics() -> list:
+    from common.models.rubric import Rubric
+    with Session(_engine) as db:
+        rows = db.exec(select(Rubric).order_by(Rubric.id)).all()
+        return [(r.id, r.name) for r in rows]
+
+
+def _preselect(service: str, tail: str, filename: str) -> list[int]:
+    """Что отметить сразу: где уже стоит этот же файл (перезаливка) + рубрики на букву-код
+    из имени (старое соглашение `сервис-буква.html`)."""
+    from common.models.service_config import ServiceRubricConfig as C
+    sel: list[int] = []
+    with Session(_engine) as db:
+        for c in db.exec(select(C).where((C.service == service) & (C.template_name == filename))).all():
+            sel.append(c.rubric_id or 0)
+    if len(tail) == 1:
+        sel += [rid for rid, name in _rubrics() if (name or "")[:1].lower() == tail]
+    return sorted(set(sel))
+
+
+def _kb_assign(sel: list[int]) -> InlineKeyboardMarkup:
+    def mark(rid: int) -> str:
+        return "✅" if rid in sel else "⬜"
+    rubs = _rubrics()
+    btns = [InlineKeyboardButton(text=f"{mark(rid)} {name}", callback_data=f"tpa:t:{rid}") for rid, name in rubs]
+    rows = [[InlineKeyboardButton(text=f"{mark(0)} ALL — все рубрики (общий)", callback_data="tpa:t:0")]]
+    rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    if rubs:
+        rows.append([InlineKeyboardButton(text="📋 Отметить все рубрики", callback_data="tpa:every")])
+    rows.append([
+        InlineKeyboardButton(text="✅ Сохранить", callback_data="tpa:save"),
+        InlineKeyboardButton(text="✖️ Отмена", callback_data="tpa:cancel"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _assign_text(service: str, filename: str, in_catalog: bool) -> str:
+    warn = "" if in_catalog else "\n⚠️ Такого сервиса нет в каталоге (🧩 Сервисы) — проверьте имя файла."
+    return (f"📄 <code>{escape(filename)}</code> → сервис <b>{escape(service)}</b>{warn}\n\n"
+            "Для каких рубрик поставить шаблон? Отметьте и нажмите «Сохранить».\n"
+            "<i>ALL — общий для сервиса; рубрика с отметкой берёт свой и перекрывает ALL.</i>")
+
+
+@router.message(StateFilter(None, TemplateAssign.pick), F.document)
+async def tpl_drop_any(m: Message, state: FSMContext):
     if m.from_user.id not in settings.admin_ids_set:
         return
     doc: Document = m.document
     name = (doc.file_name or "")
-    low = name.lower()
-    if not (low.endswith(".html") or low.endswith(".htm") or low.endswith(".txt")):
+    if not name.lower().endswith(_TPL_EXT):
         return  # не похоже на шаблон — молча игнорируем
-    try:
-        service, mailbox = parse_template_filename(name)
-    except ValueError as e:
-        await m.answer(
-            f"📄 <code>{name}</code> — имя не распознано: {e}\n"
-            "Формат: <code>service-код.html</code> (напр. <code>myemail.pl-g.html</code>)."
-        )
+    service, tail, in_catalog = detect_service(name)
+    if not service:
+        await m.answer(f"📄 <code>{escape(name)}</code> — не понял сервис. "
+                       "Назовите файл по сервису: <code>testshop.de.html</code> или <code>testshop.de-что-угодно.html</code>.")
         return
     file = await m.bot.get_file(doc.file_id)
     content = await m.bot.download_file(file.file_path)
     html = content.read().decode("utf-8", errors="ignore")
-    created = _upsert_template(service, mailbox, html, name)
-    verb = "добавлен" if created else "обновлён"
-    await m.answer(f"✅ <b>{service}</b> · {mailbox or 'все'} — шаблон {verb}.")
+    sel = _preselect(service, tail, name)
+    await state.set_state(TemplateAssign.pick)
+    await state.update_data(tpl_service=service, tpl_html=html, tpl_name=name, tpl_sel=sel, tpl_cat=in_catalog)
+    await m.answer(_assign_text(service, name, in_catalog), reply_markup=_kb_assign(sel))
+
+
+@router.callback_query(TemplateAssign.pick, F.data.startswith("tpa:"))
+async def tpl_assign_cb(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    data = await state.get_data()
+    sel = set(data.get("tpl_sel") or [])
+    act = cq.data.split(":")[1]
+    if act == "cancel":
+        await state.clear()
+        await cq.message.edit_text("Шаблон не сохранён.")
+        await cq.answer()
+        return
+    if act == "save":
+        if not sel:
+            await cq.answer("Отметьте хотя бы одну рубрику или ALL", show_alert=True)
+            return
+        from bot.handlers.admin.rubrics import set_template
+        service, html, name = data["tpl_service"], data["tpl_html"], data["tpl_name"]
+        names = dict(_rubrics())
+        for rid in sorted(sel):
+            set_template(service, rid, html, name)
+        await state.clear()
+        where = ", ".join(("ALL" if rid == 0 else escape(names.get(rid, f"#{rid}"))) for rid in sorted(sel))
+        await cq.message.edit_text(f"✅ <code>{escape(name)}</code> → <b>{escape(service)}</b>: {where}")
+        await cq.answer("Сохранено")
+        return
+    if act == "every":
+        all_ids = {rid for rid, _ in _rubrics()}
+        sel = (sel - all_ids) if all_ids <= sel else (sel | all_ids)  # повторное нажатие снимает
+    elif act == "t":
+        rid = int(cq.data.split(":")[2])
+        sel ^= {rid}
+    await state.update_data(tpl_sel=sorted(sel))
+    try:
+        await cq.message.edit_reply_markup(reply_markup=_kb_assign(sorted(sel)))
+    except Exception:
+        pass
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("tpa:"))
+async def tpl_assign_stale(cq: CallbackQuery):
+    """Кнопки старого сообщения выбора (ожидание сброшено) — не молчим."""
+    await cq.answer("Выбор устарел — киньте файл ещё раз", show_alert=True)
+
+
+@router.message(TemplateAssign.pick, F.text)
+async def tpl_assign_hint(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    await m.answer("Отметьте рубрики кнопками под файлом и нажмите «✅ Сохранить» (или «✖️ Отмена»).")
 
 
 # ---------- list / delete ----------

@@ -135,7 +135,8 @@ async def full_export() -> list[Path]:
 
 async def backup_to_channel(bot) -> tuple[bool, str]:
     """Сделать дамп БД и отправить в BACKUP_CHANNEL_ID. (ok, инфо)."""
-    chan = (settings.BACKUP_CHANNEL_ID or "").strip()
+    from common.tgids import norm_chat_id
+    chan = norm_chat_id(settings.BACKUP_CHANNEL_ID)  # «100…» без «-» → «-100…»
     if not chan:
         return False, "BACKUP_CHANNEL_ID не задан"
     try:

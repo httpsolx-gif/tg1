@@ -28,6 +28,12 @@ class TemplateUpload(StatesGroup):
     waiting = State()
 
 
+class TemplateAssign(StatesGroup):
+    """Кинули .html (п.65): сервис по имени файла, галочками выбираем рубрики.
+    data: tpl_service, tpl_html, tpl_name, tpl_sel (rubric_id; 0 = ALL рубрик)."""
+    pick = State()
+
+
 class RubricAdd(StatesGroup):
     """Создание рубрики: ждём название."""
     name = State()

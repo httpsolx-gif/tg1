@@ -46,6 +46,29 @@ class SendError(Exception):
     Текст — готовое сообщение пользователю/клиенту."""
 
 
+def _log_send(payload: dict, res: dict, *, user_id, api_token_id, ext_username) -> None:
+    """Залогировать результат отправки в каналы (SEND_CHANNEL_ID / ERR_CHANNEL_ID).
+
+    Канал отправок слушает записи с extra is_send=True (фильтр OnlySends) — туда идёт
+    КАЖДАЯ попытка (ok и fail). Канал ошибок слушает WARNING+ — туда дополнительно идёт
+    только фейл. Так в «отправках» виден весь поток, а в «ошибках» — только сбои
+    (вкл. ошибки отправки, как и просили). Файлы sends.jsonl/errors.jsonl — заодно.
+    """
+    who = (ext_username and f"@{ext_username}") or (f"id{user_id}" if user_id else None) \
+        or (f"API#{api_token_id}" if api_token_id else "бот")
+    tag = f"{payload.get('country') or '—'}/{payload.get('service') or '—'}"
+    email = payload.get("email") or "?"
+    via = res.get("via") or "—"
+    if res.get("ok"):
+        log.info("✅ %s → %s [%s] · %s", email, tag, who, via, extra={"is_send": True})
+    else:
+        reason = (res.get("info") or "ошибка отправки").replace("\n", " ")[:300]
+        # в канал отправок — как неуспешная попытка
+        log.info("❌ %s → %s [%s]: %s", email, tag, who, reason, extra={"is_send": True})
+        # и в канал ошибок — как сбой отправки (без is_send, чтобы не дублировать в «отправках»)
+        log.warning("отправка не удалась: %s → %s [%s]: %s", email, tag, who, reason)
+
+
 # ----------------------------- маршрутные помощники -----------------------------
 def short_enabled(service: Optional[str], country: Optional[str], target: str) -> bool:
     """Сокращать ли ссылку по легаси-привязкам раздела SHORT (сервис>страна>target>global)."""
@@ -201,8 +224,10 @@ async def send_payload(
     и т.п. → ok=False + запись fail в SendLog (иначе бот висит на «⏳ Отправляю…»,
     а задача API пропадает без следа)."""
     try:
-        return await _send_payload(payload, user_id=user_id, api_token_id=api_token_id,
-                                   ext_id=ext_id, ext_username=ext_username, job_id=job_id)
+        res = await _send_payload(payload, user_id=user_id, api_token_id=api_token_id,
+                                  ext_id=ext_id, ext_username=ext_username, job_id=job_id)
+        _log_send(payload, res, user_id=user_id, api_token_id=api_token_id, ext_username=ext_username)
+        return res
     except Exception as e:
         log.exception("send_payload: внутренняя ошибка")
         info = f"внутренняя ошибка: {type(e).__name__}: {e}"
@@ -218,7 +243,9 @@ async def send_payload(
                 db.commit()
         except Exception as e2:
             log.warning("SendLog (после ошибки): %s", e2)
-        return {"ok": False, "info": info, "short": payload.get("link"), "from_disp": None, "via": "—"}
+        res = {"ok": False, "info": info, "short": payload.get("link"), "from_disp": None, "via": "—"}
+        _log_send(payload, res, user_id=user_id, api_token_id=api_token_id, ext_username=ext_username)
+        return res
 
 
 async def _send_payload(

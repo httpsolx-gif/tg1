@@ -1,10 +1,11 @@
 import logging, asyncio, httpx
+from common.tgids import norm_chat_id
 
 class TelegramChannelHandler(logging.Handler):
     def __init__(self, bot_token: str, channel_id: str, level=logging.NOTSET, timeout: float = 5.0):
         super().__init__(level=level)
         self.bot_token = bot_token
-        self.channel_id = channel_id
+        self.channel_id = norm_chat_id(channel_id)  # «100…» без «-» → «-100…»
         self.timeout = timeout
 
     def emit(self, record: logging.LogRecord) -> None:

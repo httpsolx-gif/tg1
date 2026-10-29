@@ -89,25 +89,26 @@ def ops_rows(scope_id: int) -> List[List[InlineKeyboardButton]]:
     with Session(_engine) as db:
         cfg = db.get(ScopeCfg, scope_id)
     i = scope_id
+    # без дублей (п.63): «Загрузить» = «+ SMTP», «Очистка» = «🗑 SMTP», «+ SHORT» = «⚙️ SHORT»
+    # вели на те же экраны; принуд. смена — внутри «Автосмена»
     return [
         [_btn(f"🔁 Автосмена: {_auto_txt(cfg)}", f"sco:auto:{i}")],
-        [_btn("📥 Загрузить", f"sco:up:{i}"), _btn("⏭ Принуд. смена", f"sco:forced:{i}")],
-        [_btn("+ SHORT", f"sco:sh:{i}"), _btn("+ SMTP", f"sco:up:{i}")],
-        [_btn("⚙️ SHORT", f"sco:sh:{i}"), _btn("⚙️ SMTP", f"sco:accs:{i}")],
-        [_btn("🗑 SHORT", f"sco:shdel:{i}"), _btn("🗑 SMTP", f"sco:clr:{i}")],
-        [_btn("📤 Выгрузка", f"sco:dl:{i}"), _btn("🧹 Очистка", f"sco:clr:{i}")],
+        [_btn("➕ SMTP", f"sco:up:{i}"), _btn("⚙️ SMTP", f"sco:accs:{i}")],
+        [_btn("🗑 SMTP", f"sco:clr:{i}"), _btn("📤 Выгрузка SMTP", f"sco:dl:{i}")],
+        [_btn("🔗 SHORT", f"sco:sh:{i}"), _btn("🗑 SHORT", f"sco:shdel:{i}")],
     ]
 
 
 def render(scope_id: int):
-    """Карточка области: конкретная рубрика → карточка сервиса (имя/тайтл/шаблон + ops), иначе только ops."""
+    """Карточка области: конкретный сервис (любая рубрика или ALL рубрик) → карточка сервиса
+    (имя/тайтл/шаблон + ops), иначе (страна/ALL стран) только ops."""
     with Session(_engine) as db:
         cfg = db.get(ScopeCfg, scope_id)
         rname = None
         if cfg.rubric_id:
             r = db.get(Rubric, cfg.rubric_id)
             rname = r.name if r else None
-    if cfg.country != "*" and cfg.service != "*" and cfg.rubric_id:
+    if cfg.country != "*" and cfg.service != "*":
         from bot.handlers.admin.rubrics import _svc_cfg_view
         return _svc_cfg_view(cfg.country, cfg.service, cfg.rubric_id, "")
     text = f"🧩 <b>{_esc(sc.label(cfg, rname))}</b>\n\n" + ops_text(scope_id)
@@ -154,8 +155,13 @@ async def sco_card(cq: CallbackQuery, state: FSMContext):
 def _auto_view(sid: int):
     with Session(_engine) as db:
         cfg = db.get(ScopeCfg, sid)
+        cur = next(((k, a) for k, a in sc.entries(db, sid) if sc.key(k, a) == cfg.current_key), None)
+    cur_txt = (f"Текущий: <code>{_esc(sc.acc_email(*cur))}</code> ({'AWS' if cur[0] == 'aws' else 'SMTP'})\n\n"
+               if cur else "")
     text = (
-        f"🔁 Автосмена: <b>{_auto_txt(cfg)}</b>\n\n"
+        f"🔁 Автосмена: <b>{_auto_txt(cfg)}</b>\n"
+        f"{cur_txt}"
+        "⏭ Принуд. смена — сразу перейти на следующий аккаунт базы.\n\n"
         "Лимит автосмены — сколько писем отправить с одного аккаунта базы (SMTP или AWS), прежде чем перейти на следующий. "
         "0 = по собственным лимитам аккаунтов (⚙️ SMTP).\n\n"
         f"🔄 По кругу: <b>{'вкл' if cfg.wrap else 'выкл'}</b> — когда база заканчивается "
@@ -167,6 +173,7 @@ def _auto_view(sid: int):
         [_btn("🔴 Выключить" if cfg.autoswitch else "🟢 Включить", f"sco:autotog:{sid}")],
         [_btn(f"📈 Лимит автосмены: {cfg.switch_limit or '—'}", f"sco:autolim:{sid}")],
         [_btn(f"🔄 По кругу: {'вкл 🟢' if cfg.wrap else 'выкл 🔴'}", f"sco:wraptog:{sid}")],
+        [_btn("⏭ Принуд. смена", f"sco:forced:{sid}")],
         [_btn("⬅️ Назад", f"sco:card:{sid}")],
     ])
     return text, kb
@@ -244,7 +251,13 @@ async def sco_forced(cq: CallbackQuery):
     if nxt is None:
         await cq.answer("Нет другого доступного аккаунта в базе", show_alert=True)
         return
-    await _show(cq, sid, f"Сменили на {sc.acc_email(*nxt)}")
+    # кнопка теперь на экране «Автосмена» — остаёмся на нём (виден новый текущий)
+    text, kb = _auto_view(sid)
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cq.answer(f"Сменили на {sc.acc_email(*nxt)}")
 
 
 # ---------- SHORT ----------
@@ -634,7 +647,7 @@ def _kb_accs(sid: int) -> InlineKeyboardMarkup:
         cb = f"sco:acc:{sid}:{a.id}" if k == "smtp" else f"sco:aws:{sid}:{a.id}"
         rows.append([_btn(f"{mark} {name} {_limtxt(sid, k, a, cfg)}{cur}", cb)])
     if not ents:
-        rows.append([_btn("База пуста — + SMTP", f"sco:up:{sid}")])
+        rows.append([_btn("➕ База пуста — загрузить SMTP", f"sco:up:{sid}")])
     rows.append([_btn(f"🔁 Автосмена: {_auto_txt(cfg)}", f"sco:auto:{sid}")])
     rows.append([_btn("⬅️ Назад", f"sco:card:{sid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
