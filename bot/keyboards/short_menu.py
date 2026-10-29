@@ -1,14 +1,8 @@
 from typing import List
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Централизованные справочники стран/сервисов.
-# Если common.constants недоступен — используем небольшой фолбэк, чтобы меню не падало.
-try:
-    from common.constants import COUNTRIES, COUNTRY_FLAGS, COUNTRY_SERVICES  # type: ignore
-    _COUNTRIES: List[tuple[str, str]] = [(code, COUNTRY_FLAGS.get(code, "")) for code in COUNTRIES]
-except Exception:  # pragma: no cover
-    _COUNTRIES = [("PL", "🇵🇱"), ("DE", "🇩🇪"), ("CZ", "🇨🇿")]
-    COUNTRY_SERVICES = {"PL": ["myemail.pl"], "DE": ["myemail.de"], "CZ": ["myemail.cz"]}
+# Страны/сервисы — каталог в БД (п.61), правится в 🧩 SRVS → Сервисы.
+from common import catalog
 
 # Доступные сокращалки (провайдеры).
 SHORT_PROVIDERS: List[str] = ["n9.cl"]
@@ -61,7 +55,7 @@ def kb_short_scope(target: str) -> InlineKeyboardMarkup:
 # ---------- SETTINGS L3a: countries list ----------
 def kb_short_countries(target: str) -> InlineKeyboardMarkup:
     """Список стран (3 в ряд). «Назад» → выбор области."""
-    buttons = [_btn(f"{flag} {code}", f"short:c:{target}:{code}") for code, flag in _COUNTRIES]
+    buttons = [_btn(f"{c.flag} {c.code}", f"short:c:{target}:{c.code}") for c in catalog.countries()]
     rows = _chunk(buttons, 3)
     rows.append([_btn("⬅️ Назад", f"short:t:{target}")])
     return _mk(rows)
@@ -70,7 +64,7 @@ def kb_short_countries(target: str) -> InlineKeyboardMarkup:
 # ---------- SETTINGS L3b: services by country ----------
 def kb_short_services(target: str, country_code: str) -> InlineKeyboardMarkup:
     """Список сервисов страны. «Назад» → список стран."""
-    services = COUNTRY_SERVICES.get(country_code, [])
+    services = catalog.services(country_code)
     rows: List[List[InlineKeyboardButton]] = []
     if services:
         for svc in services:

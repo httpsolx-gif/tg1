@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from typing import List
 
@@ -11,11 +12,9 @@ from common.db import get_engine
 from common.models.rubric import Rubric, RubricMailbox
 from common.models.service_config import ServiceRubricConfig
 from common.config import settings
-from bot.fsm.admin import RubricAdd, RubricEdit, RubricMailboxAdd, ServiceCfgEdit
-try:
-    from common.constants import COUNTRIES as _COUNTRIES, COUNTRY_FLAGS as _FLAGS, COUNTRY_SERVICES as _CSVC
-except Exception:  # pragma: no cover
-    _COUNTRIES, _FLAGS, _CSVC = [], {}, {}
+from bot.fsm.admin import RubricAdd, RubricEdit, RubricMailboxAdd, ServiceCfgEdit, CatalogEdit
+from common import catalog  # страны/сервисы — каталог в БД (п.61)
+from html import escape as _esc
 
 router = Router(name="rubrics-admin")
 log = logging.getLogger("bot")
@@ -491,11 +490,19 @@ def service_rubric_cfg(service: str, rubric_id: int, mailbox: str) -> dict | Non
 
 # ───────── страна → сервис → рубрика → почта → {имя, тайтл, шаблон} ─────────
 def _kb_countries() -> InlineKeyboardMarkup:
-    btns = [InlineKeyboardButton(text=f"{_FLAGS.get(c, '')} {c}", callback_data=f"svc:c:{c}") for c in _COUNTRIES]
+    cs = catalog.country_services()
+    # число сервисов рядом со страной: пустые (0) в отправке скрыты
+    btns = [InlineKeyboardButton(text=f"{c.flag} {c.code} · {len(cs.get(c.code, []))}", callback_data=f"svc:c:{c.code}")
+            for c in catalog.countries()]
     rows = [[InlineKeyboardButton(text="🌐 ALL (все страны)", callback_data="sco:o:*:*:0")]]
     rows += [btns[i:i + 3] for i in range(0, len(btns), 3)]
+    rows.append([InlineKeyboardButton(text="➕ Добавить страну", callback_data="svc:cadd")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="srv:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+_COUNTRIES_TXT = ("🧩 Сервисы — выберите страну.\n"
+                  "<i>Цифра — сколько у страны сервисов. Страны с 0 в отправке не показываются.</i>")
 
 
 @router.callback_query(F.data == "svc:root")
@@ -505,9 +512,9 @@ async def svc_root(cq: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     try:
-        await cq.message.edit_text("🧩 Сервисы — выберите страну:", reply_markup=_kb_countries())
+        await cq.message.edit_text(_COUNTRIES_TXT, reply_markup=_kb_countries())
     except Exception:
-        await cq.message.answer("🧩 Сервисы — выберите страну:", reply_markup=_kb_countries())
+        await cq.message.answer(_COUNTRIES_TXT, reply_markup=_kb_countries())
     await cq.answer()
 
 
@@ -517,16 +524,23 @@ async def svc_country(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     code = cq.data.split(":")[-1]
-    svcs = _CSVC.get(code, [])
+    text, _kb = _country_view(code)
+    try:
+        await cq.message.edit_text(text, reply_markup=_kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=_kb)
+    await cq.answer()
+
+
+def _country_view(code: str):
+    svcs = catalog.services(code)
     rows = [[InlineKeyboardButton(text=f"🌐 ALL (все сервисы {code})", callback_data=f"sco:o:{code}:*:0")]]
     rows += [[InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"svc:s:{code}:{s}")] for s in svcs]
+    rows.append([InlineKeyboardButton(text="➕ Добавить сервисы", callback_data=f"svc:sadd:{code}")])
+    rows.append([InlineKeyboardButton(text="🗑 Удалить страну", callback_data=f"svc:cdel:{code}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="svc:root")])
-    _kb = InlineKeyboardMarkup(inline_keyboard=rows)
-    try:
-        await cq.message.edit_text(f"🧩 {code} — выберите сервис:", reply_markup=_kb)
-    except Exception:
-        await cq.message.answer(f"🧩 {code} — выберите сервис:", reply_markup=_kb)
-    await cq.answer()
+    hint = "" if svcs else "\n<i>Сервисов нет — в отправке страна скрыта.</i>"
+    return f"🧩 {catalog.country_flag(code)} {code} — выберите сервис:{hint}", InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query(F.data.startswith("svc:s:"))
@@ -539,6 +553,7 @@ async def svc_service(cq: CallbackQuery):
         rubrics = db.exec(select(Rubric).order_by(Rubric.id)).all()
     rows = [[InlineKeyboardButton(text="🌐 ALL (все рубрики)", callback_data=f"sco:o:{code}:{service}:0")]]
     rows += [[InlineKeyboardButton(text=f"🗂 {r.name}", callback_data=f"svc:r:{code}:{service}:{r.id}")] for r in rubrics]
+    rows.append([InlineKeyboardButton(text="🗑 Удалить сервис", callback_data=f"svc:sdel:{code}:{service}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:c:{code}")])
     _kb = InlineKeyboardMarkup(inline_keyboard=rows)
     try:
@@ -674,3 +689,132 @@ async def svc_cfg_doc(m: Message, state: FSMContext):
     _save_cfg(service, rid, mailbox, "template_html", html)
     text, kb = _svc_cfg_view(code, service, rid, mailbox)
     await m.answer(f"✅ Шаблон сохранён.\n\n{text}", reply_markup=kb)
+
+
+# ═══════════ 🧩 Сервисы: добавление/удаление стран и сервисов (п.61) ═══════════
+def _kb_back(cb: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Отмена", callback_data=cb)]])
+
+
+def _split(text: str) -> list[str]:
+    return [x for x in re.split(r"[\s,;]+", text or "") if x]
+
+
+@router.callback_query(F.data == "svc:cadd")
+async def svc_country_add_ask(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(CatalogEdit.country)
+    await cq.message.answer(
+        "➕ Пришлите <b>ISO-код страны</b> (2 латинские буквы), можно несколько через пробел:\n"
+        "<code>PL</code>  или  <code>LU SI AT</code>", reply_markup=_kb_back("svc:root"))
+    await cq.answer()
+
+
+@router.message(CatalogEdit.country, F.text)
+async def svc_country_add(m: Message, state: FSMContext):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    lines = []
+    for raw in _split(m.text):
+        code = catalog.norm_code(raw)
+        if not code:
+            lines.append(f"❌ {_esc(raw)} — нужен 2-буквенный ISO-код")
+            continue
+        ok, msg = catalog.add_country(code)
+        lines.append(("✅ " if ok else "• ") + msg)
+    await state.clear()
+    await m.answer("\n".join(lines) or "Пусто.")
+    await m.answer(_COUNTRIES_TXT, reply_markup=_kb_countries())
+
+
+@router.callback_query(F.data.startswith("svc:cdel:"))
+async def svc_country_del_ask(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    code = cq.data.split(":")[-1]
+    n = len(catalog.services(code))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"svc:cdelok:{code}")],
+        [InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"svc:c:{code}")],
+    ])
+    await cq.message.edit_text(
+        f"Удалить страну <b>{code}</b> и её сервисы ({n})?\n"
+        "<i>Настройки областей (базы SMTP, шаблоны, сокра) остаются в БД — "
+        "вернутся, если добавить страну/сервис снова.</i>", reply_markup=kb)
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("svc:cdelok:"))
+async def svc_country_del(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    code = cq.data.split(":")[-1]
+    n = catalog.delete_country(code)
+    await cq.answer(f"{code} удалена (сервисов: {n})")
+    await cq.message.edit_text(_COUNTRIES_TXT, reply_markup=_kb_countries())
+
+
+@router.callback_query(F.data.startswith("svc:sadd:"))
+async def svc_services_add_ask(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    code = cq.data.split(":")[-1]
+    await state.update_data(cat_code=code)
+    await state.set_state(CatalogEdit.services)
+    await cq.message.answer(
+        f"➕ Сервисы для <b>{code}</b> — по одному в строке или через пробел, например:\n"
+        "<code>olx.pl</code>\n<code>allegro.pl</code>\n"
+        f"Только латиница/цифры/точка/дефис, до {catalog.SERVICE_MAX_LEN} символов.",
+        reply_markup=_kb_back(f"svc:c:{code}"))
+    await cq.answer()
+
+
+@router.message(CatalogEdit.services, F.text)
+async def svc_services_add(m: Message, state: FSMContext):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    code = (await state.get_data()).get("cat_code", "")
+    added, dup, bad = catalog.add_services(code, _split(m.text))
+    await state.clear()
+    out = [f"✅ Добавлено: <b>{len(added)}</b>"]
+    if dup:
+        out.append("• Уже были: " + ", ".join(_esc(x) for x in dup))
+    if bad:
+        out.append("❌ Не подходят: " + ", ".join(f"<code>{_esc(x)}</code>" for x in bad[:10]))
+    await m.answer("\n".join(out))
+    text, kb = _country_view(code)
+    await m.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("svc:sdel:"))
+async def svc_service_del_ask(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    _, _, code, service = cq.data.split(":", 3)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"svc:sdelok:{code}:{service}")],
+        [InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"svc:s:{code}:{service}")],
+    ])
+    await cq.message.edit_text(
+        f"Удалить сервис <b>{_esc(service)}</b> ({code})?\n"
+        "<i>Настройки области/шаблоны этого сервиса остаются в БД — вернутся, если добавить его снова.</i>",
+        reply_markup=kb)
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("svc:sdelok:"))
+async def svc_service_del(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    _, _, code, service = cq.data.split(":", 3)
+    ok = catalog.delete_service(code, service)
+    await cq.answer("Удалён" if ok else "Уже удалён")
+    text, kb = _country_view(code)
+    await cq.message.edit_text(text, reply_markup=kb)

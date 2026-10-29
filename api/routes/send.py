@@ -39,10 +39,11 @@ class SendIn(BaseModel):
 
 
 def _catalog() -> dict:
-    """Доступные страны и сервисы (из констант; только страны с сервисами)."""
-    from common.constants import COUNTRY_SERVICES, COUNTRY_FLAGS
-    return {c: {"flag": COUNTRY_FLAGS.get(c, ""), "services": list(s)}
-            for c, s in COUNTRY_SERVICES.items() if s}
+    """Доступные страны и сервисы (каталог в БД, п.61; только страны с сервисами)."""
+    from common import catalog
+    flags = {c.code: c.flag for c in catalog.countries()}
+    return {c: {"flag": flags.get(c, ""), "services": s}
+            for c, s in catalog.country_services(only_with_services=True).items()}
 
 
 # ---- простой in-memory рейт-лимит на токен (один процесс uvicorn) ----

@@ -17,7 +17,7 @@ from sqlmodel import Session, select, desc
 
 from common.db import get_engine
 from common.config import settings
-from common.constants import COUNTRY_SERVICES
+from common import catalog
 from common.models.spamcheck import SpamSeed, SpamCheckResult
 from bot.fsm.admin import SpamSeedAdd
 from bot.services.spamcheck import guess_imap, run_and_report, format_card, imap_login_test, _PLACE
@@ -31,16 +31,15 @@ _SEP_RE = re.compile(r"[\s:;|]+")
 
 def _default_cs() -> Tuple[str, str]:
     """Первая активная пара страна+сервис из каталога (дефолт, когда не указано)."""
-    for country, svcs in COUNTRY_SERVICES.items():
-        if svcs:
-            return country, svcs[0]
+    for country, svcs in catalog.country_services(only_with_services=True).items():
+        return country, svcs[0]
     return "", ""
 
 
 def _country_for_service(service: str) -> str:
     """Первая страна, у которой есть такой сервис; иначе дефолтная."""
-    for country, svcs in COUNTRY_SERVICES.items():
-        if service in (svcs or []):
+    for country, svcs in catalog.country_services(only_with_services=True).items():
+        if service in svcs:
             return country
     return _default_cs()[0]
 

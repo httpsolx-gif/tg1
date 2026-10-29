@@ -72,8 +72,11 @@ async def main():
         import common.models.mx_cache  # noqa: F401  (MxCache — провайдер по MX)
         import common.models.spamcheck  # noqa: F401  (SpamSeed, SpamCheckResult — авто-проверка на спам)
         import common.models.broadcast  # noqa: F401  (BcState, BcTarget — авторассылка по группам, userbot)
+        import common.models.country  # noqa: F401  (Country — каталог стран, п.61; сервисы — таблица service)
         SQLModel.metadata.create_all(engine)
         _ensure_columns(engine)
+        from common import catalog
+        catalog.ensure_seeded()  # пустой каталог → засеять из constants (один раз)
     except Exception as e:
         logging.getLogger("bot").error("DB init failed: %s", e)
 

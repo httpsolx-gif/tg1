@@ -44,11 +44,12 @@ def _kb_cancel() -> InlineKeyboardMarkup:
 
 
 def _kb_countries() -> InlineKeyboardMarkup:
-    """Страны, у которых есть сервисы (COUNTRY_SERVICES непустой)."""
-    from common.constants import COUNTRIES, COUNTRY_FLAGS, COUNTRY_SERVICES
+    """Страны каталога, у которых есть сервисы (пустые скрыты). Каталог — БД (п.61)."""
+    from common import catalog
+    have = catalog.country_services(only_with_services=True)
     btns = [
-        InlineKeyboardButton(text=f"{COUNTRY_FLAGS.get(c, '')} {c}", callback_data=f"send:ctry:{c}")
-        for c in COUNTRIES if COUNTRY_SERVICES.get(c)
+        InlineKeyboardButton(text=f"{c.flag} {c.code}", callback_data=f"send:ctry:{c.code}")
+        for c in catalog.countries() if c.code in have
     ]
     rows = [btns[i:i + 3] for i in range(0, len(btns), 3)]
     rows.append([InlineKeyboardButton(text="✖️ Отмена", callback_data="send:cancel")])
@@ -56,9 +57,9 @@ def _kb_countries() -> InlineKeyboardMarkup:
 
 
 def _kb_services(country: str) -> InlineKeyboardMarkup:
-    """Сервисы выбранной страны (из COUNTRY_SERVICES); сервис можно и ввести текстом."""
-    from common.constants import COUNTRY_SERVICES
-    services = COUNTRY_SERVICES.get(country, [])
+    """Сервисы выбранной страны (каталог в БД); сервис можно и ввести текстом."""
+    from common import catalog
+    services = catalog.services(country)
     btns = [InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"send:svc:{s}") for s in services]
     rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
     rows.append([InlineKeyboardButton(text="⬅️ Страны", callback_data="send:ctries")])

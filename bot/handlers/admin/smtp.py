@@ -15,22 +15,7 @@ from common.security import encrypt_password
 from bot.fsm.admin import SmtpAdd, SmtpAutoAdd
 from common.config import settings
 from bot.keyboards.admin_menu import admin_menu
-try:
-    from common.constants import COUNTRIES, COUNTRY_FLAGS, COUNTRY_SERVICES
-    # Build tuples (code, display_name, flag). If no human name mapping yet, show code as name.
-    _COUNTRIES = [(code, code, COUNTRY_FLAGS.get(code, "")) for code in COUNTRIES]
-    _COUNTRY_SERVICES = COUNTRY_SERVICES
-except Exception:
-    _COUNTRIES = [
-        ("PL", "Poland", "🇵🇱"),
-        ("CZ", "Czechia", "🇨🇿"),
-        ("DE", "Germany", "🇩🇪"),
-    ]
-    _COUNTRY_SERVICES = {
-        "PL": ["myemail.pl", "testshop.pl"],
-        "CZ": ["myemail.cz", "testshop.cz"],
-        "DE": ["myemail.de", "testshop.de"],
-    }
+from common import catalog  # страны/сервисы — каталог в БД (п.61)
 from typing import List, Tuple
 from typing import Optional
 from bot.services.mailer import probe_smtp
@@ -200,13 +185,13 @@ def _chunk(seq, n):
 def _kb_countries(group: str) -> InlineKeyboardMarkup:
     # Show ALL countries at once, 3 per row, no pagination
     rows: List[List[InlineKeyboardButton]] = []
-    for chunk in _chunk(_COUNTRIES, 3):
+    for chunk in _chunk(catalog.countries(), 3):
         btns = [
             InlineKeyboardButton(
-                text=f"{flag} {name}",
-                callback_data=f"smtp:country:{group}:{code}"
+                text=f"{c.flag} {c.code}",
+                callback_data=f"smtp:country:{group}:{c.code}"
             )
-            for code, name, flag in chunk
+            for c in chunk
         ]
         rows.append(btns)
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"smtp:settings:{group}")])
@@ -214,7 +199,7 @@ def _kb_countries(group: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def _kb_services_for_country(group: str, country_code: str) -> InlineKeyboardMarkup:
-    services = _COUNTRY_SERVICES.get(country_code, [])
+    services = catalog.services(country_code)
     rows: List[List[InlineKeyboardButton]] = []
     # First row: bind whole country
     rows.append([

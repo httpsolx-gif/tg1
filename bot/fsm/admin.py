@@ -99,6 +99,12 @@ class ApiTokenFlow(StatesGroup):
     supp = State()   # suppression: ввод адресов для добавления/удаления (data: mode)
 
 
+class CatalogEdit(StatesGroup):
+    """🧩 Сервисы (п.61): ввод новых стран / сервисов страны (data: cat_code)."""
+    country = State()
+    services = State()
+
+
 class BroadcastFlow(StatesGroup):
     """📣 BROADCAST (userbot): ввод групп, текста, фото, интервала, лимита, задержек."""
     targets = State()
