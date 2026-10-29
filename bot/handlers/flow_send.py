@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from html import escape as _esc
 from typing import Optional
 
 from aiogram import Router, F
@@ -146,7 +147,7 @@ async def take_service_cb(cq: CallbackQuery, state: FSMContext):
     await state.update_data(service=service)
     await state.set_state(SendFlow.link)
     await cq.message.edit_text(
-        f"Сервис: <b>{service}</b>\n\n🔗 Пришлите ссылку (подставится вместо <code>MAIL_URL</code> в кнопке письма):",
+        f"Сервис: <b>{_esc(service)}</b>\n\n🔗 Пришлите ссылку (подставится вместо <code>MAIL_URL</code> в кнопке письма):",
         reply_markup=_kb_cancel(),
     )
     await cq.answer()
@@ -161,7 +162,7 @@ async def take_service_text(m: Message, state: FSMContext):
     await state.update_data(service=service)
     await state.set_state(SendFlow.link)
     await m.answer(
-        f"Сервис: <b>{service}</b>\n\n🔗 Пришлите ссылку (подставится вместо <code>MAIL_URL</code> в кнопке письма):",
+        f"Сервис: <b>{_esc(service)}</b>\n\n🔗 Пришлите ссылку (подставится вместо <code>MAIL_URL</code> в кнопке письма):",
         reply_markup=_kb_cancel(),
     )
 
@@ -210,13 +211,13 @@ async def take_email(m: Message, state: FSMContext):
     fix_line = ""
     if pv.get("email_fixed"):
         o, f = pv["email_fixed"]
-        fix_line = f"✏️ Адрес исправлен: <code>{o}</code> → <b>{f}</b>\n"
+        fix_line = f"✏️ Адрес исправлен: <code>{_esc(o)}</code> → <b>{_esc(f)}</b>\n"
     await m.answer(
         f"{fix_line}"
-        f"{rub_label}: <b>{pv['rub_name']}</b> · почта <b>{payload['mailbox']}</b>{pv['ovr']}\n"
+        f"{rub_label}: <b>{_esc(str(pv['rub_name']))}</b> · почта <b>{_esc(str(payload['mailbox']))}</b>{pv['ovr']}\n"
         f"• Шаблон: {pv['tpl_label']}\n"
-        f"• Тайтл: {pv['title_disp']}\n"
-        f"• Отправитель: {pv['sender_disp']}\n\n"
+        f"• Тайтл: {_esc(str(pv['title_disp']))}\n"
+        f"• Отправитель: {_esc(str(pv['sender_disp']))}\n\n"
         "⏳ Отправляю…"
     )
     await _do_send(m, payload, user_id=m.from_user.id)
@@ -227,24 +228,26 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
     from bot.services.send_core import send_payload
     res = await send_payload(payload, user_id=user_id)
     if res.get("no_account"):
-        await target.answer(f"🚫 Нет доступного аккаунта для отправки {res.get('info', '')}.")
+        await target.answer(f"🚫 Нет доступного аккаунта для отправки {_esc(res.get('info', ''))}.")
         return
     ok, info, short, from_disp, via = (
         res["ok"], res["info"], res["short"], res["from_disp"], res["via"])
     sender = payload.get("sender")
-    frm = f"{sender} &lt;{from_disp}&gt;" if sender else from_disp
+    # всё динамическое экранируем: parse_mode=HTML, а ответы SMTP вида «550 <a@b.c>: …»
+    # иначе ломают сообщение — юзер не видит ни результата, ни кнопок
+    frm = f"{_esc(sender)} &lt;{_esc(from_disp or '')}&gt;" if sender else _esc(from_disp or "—")
     lines = [
         "Отправлено" if ok else "❌ Ошибка при отправке",
         "",
-        f"Сервис: {payload.get('service') or '—'}",
-        f"Рубрика: {payload.get('rubric_name')}",
-        f"Ссылка: {short or '—'}",
-        f"Кому: {payload['email']}",
+        f"Сервис: {_esc(payload.get('service') or '—')}",
+        f"Рубрика: {_esc(str(payload.get('rubric_name')))}",
+        f"Ссылка: {_esc(short or '—')}",
+        f"Кому: {_esc(payload['email'])}",
         f"От: {frm}",
     ]
     # ответ провайдера (MessageId и т.п.) показываем только при ошибке
     if not ok:
-        lines.append(f"Через: {via}")
+        lines.append(f"Через: {_esc(via or '—')}")
         if info:
-            lines.append(f"\n<code>{info}</code>")
+            lines.append(f"\n<code>{_esc(str(info)[:800])}</code>")
     await target.answer("\n".join(lines), reply_markup=_kb_result())

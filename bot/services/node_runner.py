@@ -23,6 +23,19 @@ log = logging.getLogger("bot")
 DEFAULT_SSH_PORT = 22
 SSH_CONNECT_TIMEOUT = 15
 
+# Префикс ошибки «нода не отвечает» (п.59): SSH не подключился или на ноде нет python.
+# Письмо в этом случае ТОЧНО не ушло → безопасно переключиться на резервную ноду.
+# Таймаут уже ПОСЛЕ подключения сюда не относится — письмо могло уйти, повтор = дубль.
+NODE_DOWN = "Нода недоступна: "
+
+
+class NodeUnreachable(Exception):
+    """Не удалось подключиться к ноде по SSH (таймаут/отказ/неверный пароль)."""
+
+
+def is_node_down(info: str | None) -> bool:
+    return bool(info) and info.startswith(NODE_DOWN)
+
 # Тело скрипта, выполняемого на ноде. PAYLOAD_B64 добавляется первой строкой.
 _NODE_SCRIPT = r'''
 import base64, json, sys, ssl, smtplib
@@ -78,16 +91,19 @@ async def _run_on_node(node, command: str, *, input: Optional[str] = None, timeo
     """Открыть SSH-сессию к ноде и выполнить команду. Возвращает SSHCompletedProcess."""
     password = decrypt_password(getattr(node, "password_enc", "") or "")
     port = getattr(node, "port", None) or DEFAULT_SSH_PORT
-    conn = await asyncio.wait_for(
-        asyncssh.connect(
-            node.ip,
-            port=port,
-            username=node.login,
-            password=password,
-            known_hosts=None,  # не требуем known_hosts для произвольных нод
-        ),
-        timeout=SSH_CONNECT_TIMEOUT,
-    )
+    try:
+        conn = await asyncio.wait_for(
+            asyncssh.connect(
+                node.ip,
+                port=port,
+                username=node.login,
+                password=password,
+                known_hosts=None,  # не требуем known_hosts для произвольных нод
+            ),
+            timeout=SSH_CONNECT_TIMEOUT,
+        )
+    except Exception as e:
+        raise NodeUnreachable(f"{type(e).__name__}: {e}") from e
     try:
         return await asyncio.wait_for(conn.run(command, input=input, check=False), timeout=timeout)
     finally:
@@ -223,6 +239,8 @@ async def send_ses_via_node(
     for interp in ("python3 -", "python -"):
         try:
             r = await _run_on_node(node, interp, input=source_code, timeout=timeout + 20)
+        except NodeUnreachable as e:
+            return False, f"{NODE_DOWN}{e}"
         except Exception as e:
             return False, f"SSH: {type(e).__name__}: {e}"
         if r.exit_status == 127:
@@ -232,7 +250,7 @@ async def send_ses_via_node(
         if r.exit_status == 0 and out.startswith("OK"):
             return True, out
         return False, (out or err or f"exit {r.exit_status}")
-    return False, "python3/python не найден на ноде"
+    return False, f"{NODE_DOWN}python3/python не найден"
 
 
 async def send_via_node(
@@ -269,6 +287,8 @@ async def send_via_node(
     for interp in ("python3 -", "python -"):
         try:
             r = await _run_on_node(node, interp, input=source, timeout=timeout + 20)
+        except NodeUnreachable as e:
+            return False, f"{NODE_DOWN}{e}"
         except Exception as e:
             return False, f"SSH: {type(e).__name__}: {e}"
         if r.exit_status == 127:  # интерпретатор не найден — пробуем следующий
@@ -278,4 +298,4 @@ async def send_via_node(
         if r.exit_status == 0 and out.startswith("OK"):
             return True, out
         return False, (out or err or f"exit {r.exit_status}")
-    return False, "python3/python не найден на ноде"
+    return False, f"{NODE_DOWN}python3/python не найден"

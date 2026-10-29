@@ -6,6 +6,7 @@ autoescape выключен — это готовый HTML письма, а не
 """
 from __future__ import annotations
 
+import html as _html
 from typing import Optional
 
 from jinja2 import Environment, BaseLoader
@@ -50,8 +51,11 @@ def render_template(html: str, raw: Optional[dict] = None, **ctx) -> str:
     if url_val is None:
         url_val = ctx.get("url")
     if url_val is not None:
-        ctx.setdefault("url", url_val)
-        ctx.setdefault("MAIL_URL", url_val)
+        # ссылка и значения клиента экранируются: autoescape выключен (шаблоны — HTML),
+        # а `"` в ссылке иначе выходит из href="…" и вставляет произвольный HTML в письмо
+        url_val = _html.escape(str(url_val), quote=True)
+        ctx["url"] = url_val
+        ctx["MAIL_URL"] = url_val
     try:
         out = _env.from_string(src).render(**ctx)
     except Exception:
@@ -59,10 +63,11 @@ def render_template(html: str, raw: Optional[dict] = None, **ctx) -> str:
         for k, v in ctx.items():
             val = "" if v is None else str(v)
             out = out.replace("{{ %s }}" % k, val).replace("{{%s}}" % k, val)
-    # «сырые» плейсхолдеры (напр. *PRICE*, *PNAME*) — буквальная подстановка
-    for k, v in (raw or {}).items():
-        out = out.replace(str(k), "" if v is None else str(v))
-    # «сырой» MAIL_URL (напр. <a href="MAIL_URL">…) — подставляем ссылку
+    # «сырой» MAIL_URL (напр. <a href="MAIL_URL">…) — подставляем ссылку ДО значений клиента,
+    # иначе текст «MAIL_URL» внутри *PNAME* превратился бы в ссылку
     if url_val is not None:
-        out = out.replace("MAIL_URL", str(url_val))
+        out = out.replace("MAIL_URL", url_val)
+    # «сырые» плейсхолдеры (напр. *PRICE*, *PNAME*) — буквальная подстановка, экранированная
+    for k, v in (raw or {}).items():
+        out = out.replace(str(k), "" if v is None else _html.escape(str(v), quote=True))
     return out

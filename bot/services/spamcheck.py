@@ -19,6 +19,7 @@ import logging
 import re
 import secrets
 from datetime import datetime
+from html import escape as _esc
 from email.message import Message
 from typing import Optional
 
@@ -27,6 +28,8 @@ from sqlmodel import Session, select
 from common.config import settings
 from common.db import get_engine
 from common.models.spamcheck import SpamSeed, SpamCheckResult
+
+IMAP_TIMEOUT = 30  # сек на подключение/операцию IMAP в авто-проверке
 
 log = logging.getLogger("bot")
 _engine = get_engine()
@@ -158,7 +161,9 @@ def _imap_check(seed: SpamSeed, token: str) -> tuple[str, Optional[Message]]:
     placement: inbox|spam|missing. Ошибки логина/сети — исключением наружу."""
     host, port, ssl, _label = imap_info_for(seed)
     user = seed.imap_user or seed.email
-    M = imaplib.IMAP4_SSL(host, port) if ssl else imaplib.IMAP4(host, port)
+    # timeout обязателен: «чёрная дыра» вместо IMAP-сервера навсегда занимала поток executor'а
+    M = (imaplib.IMAP4_SSL(host, port, timeout=IMAP_TIMEOUT) if ssl
+         else imaplib.IMAP4(host, port, timeout=IMAP_TIMEOUT))
     try:
         M.login(user, seed.imap_pass)
         msg = _search_fetch(M, "INBOX", token)
@@ -327,18 +332,18 @@ def format_card(results: list[dict]) -> str:
         return head + "\n\nНет активных ящиков для проверки."
     lines = [head, ""]
     for r in results:
-        lines.append(f"📬 {r['email']} ({r.get('label') or '—'})")
+        lines.append(f"📬 {_esc(r['email'])} ({_esc(r.get('label') or '—')})")
         place = _PLACE.get(r["placement"], r["placement"])
         auth = f"SPF{_auth_mark(r.get('spf'))} DKIM{_auth_mark(r.get('dkim'))} DMARC{_auth_mark(r.get('dmarc'))}"
         tail = ""
         if r["placement"] in ("inbox", "spam"):
             tail = f" · {auth}"
             if r.get("score"):
-                tail += f" · score {r['score']}"
+                tail += f" · score {_esc(str(r['score']))}"
             if r.get("via"):
-                tail += f" · via {r['via']}"
+                tail += f" · via {_esc(str(r['via']))}"
         elif r.get("detail"):
-            tail = f" · <code>{(r['detail'] or '')[:120]}</code>"
+            tail = f" · <code>{_esc((r['detail'] or '')[:120])}</code>"
         lines.append(f"   {place}{tail}")
     return "\n".join(lines)
 

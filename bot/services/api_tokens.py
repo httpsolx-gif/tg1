@@ -265,7 +265,7 @@ def consume_quota(tid: int, n: int = 1) -> bool:
             db.add(t)
             db.commit()
             return False
-        t.sent_today += n
+        t.sent_today = max(0, t.sent_today + n)  # n<0 — возврат; после смены суток не уходим в минус
         db.add(t)
         db.commit()
         return True

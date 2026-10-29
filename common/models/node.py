@@ -16,6 +16,7 @@ class Node(SQLModel, table=True):
     port: int | None = None
     region: str | None = None  # гео AWS этой ноды (us-east-1 и т.п.); None = без региона
     purpose: str = "send"      # роль: 'send' (отправка) | 'short' (сокращалка) | 'both'
+    is_backup: bool = False    # резервная: берётся для отправки, только если основные не отвечают (п.59)
     is_active: bool = True
     error_count: int = 0
 

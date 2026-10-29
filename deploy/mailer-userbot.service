@@ -1,0 +1,21 @@
+[Unit]
+Description=TG mailer userbot (авторассылка по группам, Telethon)
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+# без сессии userbot сразу выходит — не стартуем, пока не сделан вход:
+#   .venv/bin/python -m userbot.login   (путь сессии — USERBOT_SESSION в .env)
+ConditionPathExists=__PROJECT_DIR__/userbot/account.session
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__PROJECT_DIR__/.venv/bin/python -m userbot.main
+EnvironmentFile=-__PROJECT_DIR__/.env
+Restart=always
+RestartSec=10
+# 78 = нет TG_API_ID/сессии — перезапуск не поможет, не крутим впустую
+RestartPreventExitStatus=78
+User=__RUN_USER__
+
+[Install]
+WantedBy=multi-user.target

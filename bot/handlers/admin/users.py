@@ -164,7 +164,7 @@ async def _card(uid: int) -> tuple[str, InlineKeyboardMarkup]:
         mail_lines = "   <i>нет отправок</i>"
     admin_note = " <i>(админ)</i>" if uid in settings.admin_ids_set else ""
     text = (
-        f"👤 Юзер <code>{uid}</code> · {('@' + uname) if uname else '—'}\n"
+        f"👤 Юзер <code>{uid}</code> · {_esc('@' + uname) if uname else '—'}\n"
         f"Класс: <b>{_CLASS_RU.get(cls, cls)}</b>{admin_note}\n\n"
         f"• Отправок: <b>{sok}</b> ok из {stot}\n"
         f"• Переходов: <b>{rep['clicks']}</b> (конв {pct(rep['clicks'], sok)})\n"

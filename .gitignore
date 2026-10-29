@@ -12,3 +12,8 @@ deploy/backups/
 
 # runtime logs
 *.log
+
+# userbot (Telethon): сессия аккаунта = креды авторизации, медиа рассылки
+*.session
+*.session-journal
+userbot/media/

@@ -40,6 +40,10 @@ def get_engine(echo: bool = False):
             echo=echo,
             future=True,
             pool_pre_ping=True,
+            # без таймаутов недоступная БД вешала event loop на минуты (синхронные вызовы)
+            # и не давала сторожу лидер-лока вовремя остановить процесс
+            connect_args={"connect_timeout": 5, "keepalives": 1, "keepalives_idle": 10,
+                          "keepalives_interval": 5, "keepalives_count": 3},
         )
     return _engine
 

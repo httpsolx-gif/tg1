@@ -41,6 +41,11 @@ async def _run() -> None:
                 job_id=job.get("job_id"),
             )
             log.info("api send %s token=%s ok=%s", job.get("job_id"), job.get("token_id"), res.get("ok"))
+            # квота списана при постановке в очередь — неудачная отправка её возвращает
+            # (иначе при лежащих нодах/без аккаунтов клиент «съедал» суточный лимит впустую)
+            if not res.get("ok") and job.get("token_id") is not None:
+                from bot.services import api_tokens as T
+                T.consume_quota(job["token_id"], -1)
         except Exception as e:  # воркер не должен падать из-за одной задачи
             log.exception("api send job %s failed: %s", job.get("job_id"), e)
         finally:

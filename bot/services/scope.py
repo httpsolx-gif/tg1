@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import func, update
 from sqlmodel import Session, select
 
 from common.db import get_engine
@@ -138,12 +139,13 @@ def scope_count(scope_id: int, kind: str, acc_id: int) -> int:
 
 def bump_scope_count(scope_id: int, kind: str, acc_id: int) -> None:
     """+1 к счётчику автосмены аккаунта в этой области (после успешной отправки)."""
+    # атомарно в БД: read-modify-write терял инкременты при параллельных отправках (бот + API)
+    model = ScopeAws if kind == "aws" else ScopeSmtp
+    col = model.aws_id if kind == "aws" else model.smtp_id
     with Session(_engine) as db:
-        l = _link(db, scope_id, kind, acc_id)
-        if l:
-            l.sent_count = (l.sent_count or 0) + 1
-            db.add(l)
-            db.commit()
+        db.exec(update(model).where(model.scope_id == scope_id, col == acc_id)
+                .values(sent_count=func.coalesce(model.sent_count, 0) + 1))
+        db.commit()
 
 
 def reset_scope_count(scope_id: int, kind: str, acc_id: int) -> None:
@@ -186,7 +188,9 @@ def current_entry(db: Session, cfg: ScopeCfg, *, advance: bool = False) -> Optio
                 if l:
                     l.sent_count = 0
                     db.add(l)
-            pick = active[0]
+            # принуд. смена: после сброса всё равно уходим с текущего (если есть другой)
+            others = [p for p in active if key(*p) != cfg.current_key] if advance else []
+            pick = (others or active)[0]
             cfg.current_key = key(*pick)
             db.add(cfg)
             db.commit()

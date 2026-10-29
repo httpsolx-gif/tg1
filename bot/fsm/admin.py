@@ -99,6 +99,16 @@ class ApiTokenFlow(StatesGroup):
     supp = State()   # suppression: ввод адресов для добавления/удаления (data: mode)
 
 
+class BroadcastFlow(StatesGroup):
+    """📣 BROADCAST (userbot): ввод групп, текста, фото, интервала, лимита, задержек."""
+    targets = State()
+    caption = State()
+    photo = State()
+    interval = State()
+    cap = State()
+    delays = State()
+
+
 class SpamSeedAdd(StatesGroup):
     """🕵️ SPAM-check: загрузка сид-ящиков пачкой.
 

@@ -16,16 +16,17 @@
 """
 from __future__ import annotations
 
+import html as _html
 import logging
 import secrets
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import func, update
 from sqlmodel import Session, select
 
 from common.db import get_engine
 from common.models.send_log import SendLog
-from common.models.node import Node
 from common.models.aws import AwsAccount
 from common.models.smtp import SmtpAccount
 from bot.services.smtp_pool import pick_smtp
@@ -33,6 +34,7 @@ from bot.services.templates import render_template, default_template, resolve_te
 from bot.services.short_client import shorten_url
 from bot.services import mailer as mailer_svc
 from bot.services.node_runner import send_via_node, send_ses_via_node
+from bot.services.node_pool import send_nodes, ses_nodes, send_with_failover
 from bot.services.aws_ses import send_via_ses
 
 log = logging.getLogger("bot")
@@ -50,30 +52,6 @@ def short_enabled(service: Optional[str], country: Optional[str], target: str) -
     from bot.services.short_policy import get_binding
     with Session(_engine) as db:
         return get_binding(db, service=service, country=country, target=target) is not None
-
-
-def node_for_aws(aws) -> "Node | None":
-    """Нода для SES: активная нода с совпадающим регионом, затем явная привязка aws.node_id."""
-    reg = (aws.region or "").strip().lower()
-    with Session(_engine) as db:
-        nodes = db.exec(
-            select(Node).where(Node.is_active == True).order_by(Node.error_count, Node.id)  # noqa: E712
-        ).all()
-    if reg:
-        for n in nodes:
-            if (n.region or "").strip().lower() == reg:
-                return n
-    if aws.node_id:
-        for n in nodes:
-            if n.id == aws.node_id:
-                return n
-    return None
-
-
-def first_node() -> "Node | None":
-    """Нода для SMTP: первая активная (по id)."""
-    with Session(_engine) as db:
-        return db.exec(select(Node).where(Node.is_active == True).order_by(Node.id)).first()  # noqa: E712
 
 
 async def resolve_short(link: str, provider: str, track: Optional[str] = None) -> str:
@@ -151,14 +129,14 @@ def build_payload(
     if sender_class == "black":
         if black_denied(email):
             dom = email.rsplit("@", 1)[-1]
-            raise SendError(f"🚫 На домен <b>{dom}</b> отправка для black запрещена (дроп-лист рубрики «black»).")
+            raise SendError(f"🚫 На домен <b>{_html.escape(dom)}</b> отправка для black запрещена (дроп-лист рубрики «black»).")
         rub = ensure_black_rubric()
     else:
         rub = rubric_for_email(email)
         if not rub:
             dom = email.rsplit("@", 1)[-1]
             raise SendError(
-                f"🚫 Нет рубрики для домена <b>{dom}</b>. Добавь его в «✉️ Почты» нужной рубрики "
+                f"🚫 Нет рубрики для домена <b>{_html.escape(dom)}</b>. Добавь его в «✉️ Почты» нужной рубрики "
                 "или создай рубрику <b>other</b> (🧩 SRVS → Рубрики).")
 
     code = (rub["name"][:1] or "").lower()
@@ -170,11 +148,11 @@ def build_payload(
     if cfg.get("template_html"):
         tpl_label = "(из конфига сервиса)"
     elif tpl_spec is not None:
-        tpl_label = f"<code>{service}-{code}.html</code>"
+        tpl_label = f"<code>{_html.escape(service)}-{code}.html</code>"
     elif tpl_gen is not None:
-        tpl_label = f"<code>{service}.html</code> (общий)"
+        tpl_label = f"<code>{_html.escape(service)}.html</code> (общий)"
     else:
-        tpl_label = f"<code>{service}-{code}.html</code> ⚠️ (нет — будет стандартный)"
+        tpl_label = f"<code>{_html.escape(service)}-{code}.html</code> ⚠️ (нет — будет стандартный)"
     html = cfg.get("template_html") or tpl_spec or tpl_gen or default_template()
 
     group = rubric_group(rub)
@@ -219,8 +197,39 @@ async def send_payload(
     job_id: Optional[str] = None,
 ) -> dict:
     """Выполнить отправку по payload. Пишет SendLog. Возвращает
-    {ok, info, short, from_disp, via}. Исключений наружу не бросает (ошибки транспорта
-    отражаются в ok/info)."""
+    {ok, info, short, from_disp, via}. Исключений наружу не бросает: сбой БД/сокращения
+    и т.п. → ok=False + запись fail в SendLog (иначе бот висит на «⏳ Отправляю…»,
+    а задача API пропадает без следа)."""
+    try:
+        return await _send_payload(payload, user_id=user_id, api_token_id=api_token_id,
+                                   ext_id=ext_id, ext_username=ext_username, job_id=job_id)
+    except Exception as e:
+        log.exception("send_payload: внутренняя ошибка")
+        info = f"внутренняя ошибка: {type(e).__name__}: {e}"
+        try:
+            with Session(_engine) as db:
+                db.add(SendLog(
+                    user_id=user_id, smtp_id=None, email=payload.get("email"), status="fail",
+                    error=info[:500], created_at=datetime.utcnow().isoformat(),
+                    country=payload.get("country"), service=payload.get("service"),
+                    mailbox=payload.get("mailbox"), short_provider=payload.get("short_provider"),
+                    api_token_id=api_token_id, ext_id=ext_id, ext_username=ext_username, job_id=job_id,
+                ))
+                db.commit()
+        except Exception as e2:
+            log.warning("SendLog (после ошибки): %s", e2)
+        return {"ok": False, "info": info, "short": payload.get("link"), "from_disp": None, "via": "—"}
+
+
+async def _send_payload(
+    payload: dict,
+    *,
+    user_id: Optional[int],
+    api_token_id: Optional[int],
+    ext_id: Optional[str],
+    ext_username: Optional[str],
+    job_id: Optional[str],
+) -> dict:
     from bot.services.scope import scope_pick, bump_scope_count
 
     provider = payload.get("short_provider") or "off"
@@ -254,20 +263,32 @@ async def send_payload(
 
     if kind == "aws":
         from_disp = acc.email_from
-        node = node_for_aws(acc)
+        # ноды региона: основные → резервные; не ответила → следующая (п.59)
+        nodes = ses_nodes(acc)
+        node, all_down = None, False
+        if nodes:
+            ok, info, node, all_down = await send_with_failover(nodes, lambda n: send_ses_via_node(
+                n, acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender")))
         if node is not None:
-            via = f"SES через ноду {node.login}@{node.ip} ({acc.region})"
-            ok, info = await send_ses_via_node(node, acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
+            via = f"SES через ноду {node.login}@{node.ip} ({acc.region})" + (" · резерв" if node.is_backup else "")
         else:
-            via = f"SES {acc.region}, с бота — нет ноды с этим регионом"
+            # нет ноды региона или все лежат → SES с бота (меняется только IP API-запроса)
+            via = (f"SES {acc.region}, с бота — ноды региона не отвечают" if all_down
+                   else f"SES {acc.region}, с бота — нет ноды с этим регионом")
             ok, info = await send_via_ses(acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
     else:
         smtp = acc
         from_disp = smtp.email
-        node = first_node()
-        if node is not None:
-            via = f"SMTP через ноду {node.login}@{node.ip}"
-            ok, info = await send_via_node(node, smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
+        # основные ноды → резервные; не ответила → следующая (п.59)
+        nodes = send_nodes()
+        if nodes:
+            ok, info, node, all_down = await send_with_failover(nodes, lambda n: send_via_node(
+                n, smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender")))
+            if node is not None:
+                via = f"SMTP через ноду {node.login}@{node.ip}" + (" · резерв" if node.is_backup else "")
+            else:
+                # все ноды лежат — НЕ шлём с IP бота, отдаём ошибку
+                via = "SMTP — все ноды недоступны"
         else:
             via = "SMTP локально (активных нод нет)"
             ok, info = await mailer_svc.send_via_account(smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
@@ -277,12 +298,12 @@ async def send_payload(
             if has_base and scope_id:
                 bump_scope_count(scope_id, kind, acc.id)
             elif acc.id is not None:
+                # атомарный +1 (параллельные отправки бота и API не теряют инкременты)
+                model = SmtpAccount if kind == "smtp" else AwsAccount
                 with Session(_engine) as db:
-                    row = db.get(SmtpAccount if kind == "smtp" else AwsAccount, acc.id)
-                    if row:
-                        row.sent_count = (row.sent_count or 0) + 1
-                        db.add(row)
-                        db.commit()
+                    db.exec(update(model).where(model.id == acc.id)
+                            .values(sent_count=func.coalesce(model.sent_count, 0) + 1))
+                    db.commit()
         except Exception as e:
             log.warning("sent_count: %s", e)
 

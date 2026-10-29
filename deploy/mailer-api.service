@@ -1,0 +1,20 @@
+[Unit]
+Description=TG mailer API (FastAPI)
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+# хост/порт — API_HOST/API_PORT в .env (по умолчанию 127.0.0.1:8080, наружу только через CF/nginx)
+ExecStart=__PROJECT_DIR__/.venv/bin/python -m api.main
+EnvironmentFile=-__PROJECT_DIR__/.env
+Environment=PYTHONPATH=__PROJECT_DIR__
+Restart=always
+RestartSec=3
+# graceful-shutdown: воркер дорабатывает очередь до 30с (api/worker.py stop)
+TimeoutStopSec=45
+User=__RUN_USER__
+
+[Install]
+WantedBy=multi-user.target

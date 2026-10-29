@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from typing import List, Tuple
 
 from aiogram import Router, F
@@ -12,6 +13,7 @@ from common.models.node import Node
 from common.security import encrypt_password
 from common.config import settings
 from bot.fsm.admin import NodeAdd, NodeEdit
+from bot.services import node_pool
 
 router = Router(name="nodes-admin")
 log = logging.getLogger("bot")
@@ -19,15 +21,24 @@ _engine = get_engine()
 
 
 # ---------- keyboards ----------
+def _mark(n: Node) -> str:
+    """🟢 работает / 🟠 включена, но не отвечает (переключились на другую) / 🔴 выключена."""
+    if not n.is_active:
+        return "🔴"
+    return "🟠" if node_pool.is_down(n.id) else "🟢"
+
+
+def _tags(n: Node) -> str:
+    return (f" · {n.region}" if n.region else "") + (" · 🛟 резерв" if n.is_backup else "")
+
+
 def kb_nodes_root() -> InlineKeyboardMarkup:
     """Корень NODES = сразу список нод (в названии — IP), снизу Add/Назад."""
     rows: List[List[InlineKeyboardButton]] = []
     with Session(_engine) as db:
         nodes = db.exec(select(Node).order_by(Node.id)).all()
     for n in nodes:
-        mark = "🟢" if n.is_active else "🔴"
-        geo = f" · {n.region}" if n.region else ""
-        rows.append([InlineKeyboardButton(text=f"{mark} {n.ip}{geo}", callback_data=f"node:open:{n.id}")])
+        rows.append([InlineKeyboardButton(text=f"{_mark(n)} {n.ip}{_tags(n)}", callback_data=f"node:open:{n.id}")])
     rows.append([InlineKeyboardButton(text="+ Добавить ноду", callback_data="node:add")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="node:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -47,10 +58,8 @@ def _kb_list() -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="Пусто — добавьте ноды", callback_data="node:add")])
     else:
         for n in nodes:
-            mark = "🟢" if n.is_active else "🔴"
-            geo = f" · {n.region}" if n.region else ""
             rows.append([
-                InlineKeyboardButton(text=f"{mark} {n.login}@{n.ip}{geo}", callback_data=f"node:open:{n.id}"),
+                InlineKeyboardButton(text=f"{_mark(n)} {n.login}@{n.ip}{_tags(n)}", callback_data=f"node:open:{n.id}"),
             ])
     rows.append([InlineKeyboardButton(text="+ Добавить ноду", callback_data="node:add")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="node:root")])
@@ -64,18 +73,26 @@ def _node_view(nid: int):
     if not n:
         return None, None
     mark = "🟢 включена" if n.is_active else "🔴 выключена"
+    since = node_pool.down_since(n.id) if n.is_active else None
+    if since:
+        mark = f"🟠 не отвечает с {time.strftime('%H:%M:%S', time.localtime(since))} — письма идут через другую ноду"
     _ROLE_RU = {"send": "отправка", "short": "сокращалка", "both": "отправка+сокращалка"}
     purpose = n.purpose or "send"
     text = (
         f"🖥 <b>{n.login}@{n.ip}</b>\n\n"
         f"• Роль: <b>{_ROLE_RU.get(purpose, purpose)}</b>\n"
         f"• Регион (гео AWS): <b>{n.region or '—'}</b>\n"
-        f"• Статус: {mark}"
+        f"• Тип: <b>{'🛟 резервная' if n.is_backup else 'основная'}</b>\n"
+        f"• Статус: {mark}\n\n"
+        "<i>Резервная берётся для отправки, только если основные не отвечают по SSH. "
+        "Основная поднялась — письма сами возвращаются на неё.</i>"
     )
     toggle = "🔴 Выключить" if n.is_active else "🟢 Включить"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"🎛 Роль: {_ROLE_RU.get(purpose, purpose)}", callback_data=f"node:role:{nid}")],
         [InlineKeyboardButton(text=f"🌍 Регион: {n.region or '—'}", callback_data=f"node:region:{nid}")],
+        [InlineKeyboardButton(text=("🛟 Резервная → сделать основной" if n.is_backup else "🛟 Сделать резервной"),
+                              callback_data=f"node:backup:{nid}")],
         [
             InlineKeyboardButton(text=toggle, callback_data=f"node:toggle:{nid}"),
             InlineKeyboardButton(text="🧪 Тест SSH", callback_data=f"node:test:{nid}"),
@@ -186,6 +203,29 @@ async def node_toggle(cq: CallbackQuery):
     except Exception:
         pass
     await cq.answer(f"Нода {state_txt}")
+
+
+@router.callback_query(F.data.startswith("node:backup:"))
+async def node_backup(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    nid = int(cq.data.split(":")[-1])
+    with Session(_engine) as db:
+        n = db.get(Node, nid)
+        if not n:
+            await cq.answer("Нода не найдена", show_alert=True)
+            return
+        n.is_backup = not n.is_backup
+        db.add(n)
+        db.commit()
+        backup = n.is_backup
+    text, kb = _node_view(nid)
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass
+    await cq.answer("Нода теперь резервная" if backup else "Нода теперь основная")
 
 
 _ROLE_CYCLE = {"send": "short", "short": "both", "both": "send"}

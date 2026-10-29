@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
-COPY pyproject.toml /app/
-RUN pip install -U pip && pip install -e .
+# код копируем ДО установки: editable-install пустой папки не даёт пакетов
 COPY . /app
+RUN pip install -U pip && pip install -e .
 ENV PYTHONUNBUFFERED=1
-CMD ["python", "bot/main.py"]
+CMD ["python", "-m", "bot.main"]

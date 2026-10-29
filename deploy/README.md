@@ -18,8 +18,26 @@ sudo DB_PASS='сгенерится-если-пусто' \
      bash deploy/bootstrap.sh
 ```
 Скрипт идемпотентный: ставит системные пакеты, Postgres (роль+база), venv + `pip install -e .`,
-создаёт `.env` (если нет), systemd-юнит `mailerbot` и запускает его. Таблицы бот создаёт сам
-на старте (`create_all` + ensure-колонки). Логи: `journalctl -u mailerbot -f`.
+создаёт `.env` (если нет), systemd-юниты и запускает их. Таблицы бот создаёт сам
+на старте (`create_all` + ensure-колонки).
+
+| Юнит | Что | Автоподъём |
+|---|---|---|
+| `mailerbot` | бот (polling + бэкапы + спам-проверка), под лидер-локом | `Restart=always` + `enable` |
+| `mailer-api` | FastAPI (`API_HOST`/`API_PORT` из `.env`, по умолчанию 127.0.0.1:8080) | `Restart=always` + `enable` |
+| `mailer-userbot` | авторассылка по группам, под лидер-локом; стартует только когда есть `userbot/account.session` | `Restart=always` + `enable` |
+
+Не ставить API/userbot: `INSTALL_API=0` / `INSTALL_USERBOT=0`. Userbot после установки ждёт входа:
+`sudo -u <user> .venv/bin/python -m userbot.login`, затем `systemctl start mailer-userbot`
+(нужен `telethon`: `.venv/bin/python -m pip install telethon`).
+Логи: `journalctl -u mailerbot -f` (`-u mailer-api`, `-u mailer-userbot`).
+
+**Резерв на втором сервере:** тот же `bootstrap.sh` с `DATABASE_URL` общей базы —
+`sudo DATABASE_URL='postgresql+psycopg://mailer:PASS@MAIN_IP:5432/mailer_app' BOT_TOKEN='…' ADMIN_IDS='…' bash deploy/bootstrap.sh`
+(локальный Postgres не ставится). На основном сервере Postgres должен принимать подключения с IP резерва
+(`listen_addresses` в postgresql.conf + строка в `pg_hba.conf`, лучше через приватную сеть/VPN). Только прямое
+подключение, не через pgbouncer.
+Бот и userbot там встанут в резерв (лидер-лок, п.57 PROJECT_MAP) и перехватят работу, если основной умрёт.
 
 ## Бэкапы
 
@@ -36,5 +54,5 @@ sudo DB_PASS='сгенерится-если-пусто' \
 # на новом сервере: bootstrap (см. выше), затем залить последний дамп:
 bash deploy/restore.sh deploy/backups/db_YYYYmmdd_HHMMSS.sql.gz
 ```
-⚠️ Один `BOT_TOKEN` = один поллер. Для аварийного переноса останови старого бота,
-подними нового из дампа. Независимый второй инстанс — заведи отдельный токен и БД.
+⚠️ Один `BOT_TOKEN` = один поллер. Два экземпляра на ОДНОЙ базе безопасны — работает только
+лидер (лидер-лок). Перенос на новую базу из дампа: останови старого бота, подними нового.

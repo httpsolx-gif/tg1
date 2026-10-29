@@ -25,6 +25,7 @@ log = logging.getLogger("bot")
 ROOT = Path(__file__).resolve().parents[2]
 BACKUP_DIR = ROOT / "deploy" / "backups"
 KEEP = 14  # сколько локальных дампов хранить
+TG_UPLOAD_LIMIT = 50 * 1024 * 1024  # лимит Bot API на send_document
 
 
 def _ts() -> str:
@@ -142,6 +143,11 @@ async def backup_to_channel(bot) -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
     from aiogram.types import FSInputFile
+    size = path.stat().st_size
+    if size > TG_UPLOAD_LIMIT:
+        # Bot API не примет файл > 50 МБ — без проверки бэкапы молча переставали уходить
+        return False, (f"дамп {size / 1024 / 1024:.1f} МБ больше лимита Telegram 50 МБ — "
+                       f"в канал не отправлен, лежит на сервере: {path}")
     try:
         cap = f"🗄 Бэкап БД {_dt.datetime.now():%Y-%m-%d %H:%M} · {path.stat().st_size // 1024} КБ"
         await bot.send_document(chan, FSInputFile(str(path)), caption=cap)

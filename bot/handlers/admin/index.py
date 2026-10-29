@@ -11,6 +11,7 @@ from bot.fsm.admin import (
     SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit,
     RubricMailboxAdd, MailboxAdd, MailboxDomains, ScopeInput, SmtpLimit,
     ServiceCfgEdit, ShortDomainAdd, AccessAdd, UserFlow, ApiTokenFlow, SpamSeedAdd,
+    BroadcastFlow,
 )
 
 router = Router()
@@ -46,6 +47,8 @@ async def admin_entry(m: Message):
         AccessAdd.waiting, UserFlow.act, UserFlow.search,
         ApiTokenFlow.label, ApiTokenFlow.edit, ApiTokenFlow.supp,
         SpamSeedAdd.waiting,
+        BroadcastFlow.targets, BroadcastFlow.caption, BroadcastFlow.photo,
+        BroadcastFlow.interval, BroadcastFlow.cap, BroadcastFlow.delays,
     ),
     F.text.func(lambda t: isinstance(t, str) and _strip(t) in MENU_TEXTS),
 )
@@ -108,6 +111,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
     from bot.handlers.admin.users import kb_users_root
     from bot.handlers.admin.api import kb_api_root
     from bot.handlers.admin.spamcheck import kb_spamcheck_root
+    from bot.handlers.admin.broadcast import kb_broadcast_root, _root_text as bc_root_text
 
     screens = {
         "smtp": ("SMTP — выберите действие:", kb_smtp_root),
@@ -121,6 +125,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         "users": ("👥 <b>USERS</b> — списки доступа отправителей:", kb_users_root),
         "api": ("🛡 <b>API</b> — токены публичного API:", kb_api_root),
         "spam": ("🕵️ <b>SPAM-check</b> — сид-ящики и проверка размещения:", kb_spamcheck_root),
+        "bc": (bc_root_text(), kb_broadcast_root),
     }
     if sec in screens:
         title, kb_fn = screens[sec]
@@ -209,6 +214,13 @@ async def admin_alert(m: Message):
         return
     from bot.handlers.admin.alert import show_alert_root
     await show_alert_root(m)
+
+@router.message(F.text.in_({"📣 BC", "BC", "BROADCAST"}))
+async def admin_broadcast(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.broadcast import show_broadcast_root
+    await show_broadcast_root(m)
 
 @router.message(F.text.in_({"🕵️ SPAM", "SPAM"}))
 async def admin_spam(m: Message):
