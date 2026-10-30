@@ -59,28 +59,37 @@ def _ensure_columns(engine):
                 logging.getLogger("bot").warning("ensure column failed: %s (%s)", s, e)
 
 
+def init_db():
+    """Схема БД: create_all + ensure-колонки + сид каталога. Идемпотентно, только добавляет.
+
+    Бросает исключение при ошибке. Вызывается на старте бота и из deploy/update.sh
+    (новым кодом ДО рестарта — чтобы падение схемы откатило выкатку, а не уронило бота).
+    """
+    engine = get_engine()
+    # регистрируем модели, создаваемые через create_all (не в alembic)
+    import common.models.short_domain  # noqa: F401
+    import common.models.access  # noqa: F401  (AccessEntry, SeenUser)
+    import common.models.appstate  # noqa: F401  (AppState — курсор выгрузки /sends)
+    import common.models.api_token  # noqa: F401  (ApiToken — токены публичного API)
+    import common.models.suppression  # noqa: F401  (Suppression — не слать на адрес)
+    import common.models.api_audit  # noqa: F401  (ApiAudit — аудит вызовов API)
+    import common.models.mx_cache  # noqa: F401  (MxCache — провайдер по MX)
+    import common.models.spamcheck  # noqa: F401  (SpamSeed, SpamCheckResult — авто-проверка на спам)
+    import common.models.broadcast  # noqa: F401  (BcState, BcTarget — авторассылка по группам, userbot)
+    import common.models.country  # noqa: F401  (Country — каталог стран, п.61; сервисы — таблица service)
+    SQLModel.metadata.create_all(engine)
+    _ensure_columns(engine)
+    from common import catalog
+    catalog.ensure_seeded()  # пустой каталог → засеять из constants (один раз)
+
+
 async def main():
     configure_logging(settings.BOT_TOKEN)
 
     # Схема БД — ДО лидер-лока: резерв с новым кодом тоже добавляет колонки (IF NOT EXISTS,
     # идемпотентно), иначе обновлённый API/резерв падал бы на отсутствующей колонке.
     try:
-        engine = get_engine()
-        # регистрируем модели, создаваемые через create_all (не в alembic)
-        import common.models.short_domain  # noqa: F401
-        import common.models.access  # noqa: F401  (AccessEntry, SeenUser)
-        import common.models.appstate  # noqa: F401  (AppState — курсор выгрузки /sends)
-        import common.models.api_token  # noqa: F401  (ApiToken — токены публичного API)
-        import common.models.suppression  # noqa: F401  (Suppression — не слать на адрес)
-        import common.models.api_audit  # noqa: F401  (ApiAudit — аудит вызовов API)
-        import common.models.mx_cache  # noqa: F401  (MxCache — провайдер по MX)
-        import common.models.spamcheck  # noqa: F401  (SpamSeed, SpamCheckResult — авто-проверка на спам)
-        import common.models.broadcast  # noqa: F401  (BcState, BcTarget — авторассылка по группам, userbot)
-        import common.models.country  # noqa: F401  (Country — каталог стран, п.61; сервисы — таблица service)
-        SQLModel.metadata.create_all(engine)
-        _ensure_columns(engine)
-        from common import catalog
-        catalog.ensure_seeded()  # пустой каталог → засеять из constants (один раз)
+        init_db()
     except Exception as e:
         logging.getLogger("bot").error("DB init failed: %s", e)
 

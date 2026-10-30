@@ -17,3 +17,6 @@ deploy/backups/
 *.session
 *.session-journal
 userbot/media/
+
+# deploy/update.sh
+.update.lock
