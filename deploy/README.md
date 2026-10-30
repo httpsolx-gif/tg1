@@ -39,6 +39,16 @@ sudo DB_PASS='сгенерится-если-пусто' \
 подключение, не через pgbouncer.
 Бот и userbot там встанут в резерв (лидер-лок, п.57 PROJECT_MAP) и перехватят работу, если основной умрёт.
 
+## Текущий прод
+
+- **Сервер бота:** `23.27.22.210`, проект `/opt/mailer` (юзер `mailer`), Python 3.11, бот @grzlmail_bot,
+  API `127.0.0.1:8090` → `https://grzl.cc`. На сервере же — `tgshop` (Morty Shop, :8080), не трогать.
+- **Код** едет через git по SSH в bare-репо на сервере (он же `origin` рабочей копии):
+  ```bash
+  git push root@23.27.22.210:/opt/mailer.git HEAD:main
+  ssh root@23.27.22.210 'cd /opt/mailer && bash deploy/update.sh'
+  ```
+
 ## API на своём домене (Cloudflare + nginx)
 
 ```bash
