@@ -39,6 +39,19 @@ sudo DB_PASS='сгенерится-если-пусто' \
 подключение, не через pgbouncer.
 Бот и userbot там встанут в резерв (лидер-лок, п.57 PROJECT_MAP) и перехватят работу, если основной умрёт.
 
+## API на своём домене (Cloudflare + nginx)
+
+```bash
+sudo .venv/bin/python deploy/api_domain.py grzl.cc      # на сервере бота, после bootstrap
+```
+Или сразу в bootstrap: `API_DOMAIN='grzl.cc' CF_TOKEN='…' NAMESILO_KEY='…'` (токены можно не передавать —
+возьмутся из short-доменов в базе бота). Идемпотентно: зона в CF → NS у NameSilo → SSL Full(strict) +
+Always HTTPS → проксируемая A-запись на IP сервера → origin-сертификат CF (ключ не покидает сервер,
+`/etc/ssl/mailer-api/`) → `/etc/nginx/conf.d/mailer-api.conf` (:443 → `127.0.0.1:API_PORT`, :80 → https).
+nginx пускает **только IP Cloudflare** (остальным 403) — API доверяет `CF-Connecting-IP`.
+Только DNS с любой машины: `--ip <IP сервера> --dns-only`. Swagger для клиента — `API_DOCS=1` в `.env`
+→ `https://<домен>/docs`; основная дока клиенту — `api/CLIENT.md`.
+
 ## Обновление прода без остановки
 
 ```bash

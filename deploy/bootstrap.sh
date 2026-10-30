@@ -4,6 +4,8 @@
 # Резервный сервер (общая база основного):
 #   sudo DATABASE_URL='postgresql+psycopg://mailer:PASS@MAIN_IP:5432/mailer_app' BOT_TOKEN='...' ADMIN_IDS='...' bash deploy/bootstrap.sh
 # Юниты: mailerbot + mailer-api + mailer-userbot (INSTALL_API=0 / INSTALL_USERBOT=0 — не ставить).
+# API на своём домене (CF + nginx, deploy/api_domain.py): API_DOMAIN='grzl.cc' CF_TOKEN='…' NAMESILO_KEY='…'
+#   (токены можно не передавать, если база уже с short-доменами — возьмутся оттуда)
 # Идемпотентно: можно запускать повторно. Роль «сокра» ставится провижном домена
 # из бота; роль «отправка» — просто добавить ноду в NODES (ничего ставить не надо).
 set -euo pipefail
@@ -17,6 +19,8 @@ DB_PASS="${DB_PASS:-}"                 # пусто → сгенерим (тол
 # Без этого резерв поднял бы СВОЮ пустую базу, стал бы вторым лидером и дрался за токен.
 EXT_DATABASE_URL="${DATABASE_URL:-}"
 RUN_USER="${RUN_USER:-${SUDO_USER:-$(whoami)}}"
+# интерпретатор для venv: проекту нужен Python ≥3.11 (на Ubuntu 22.04 — PYTHON=python3.11 из deadsnakes)
+PYTHON="${PYTHON:-python3}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
 
@@ -63,7 +67,9 @@ fi
 
 # --- venv + зависимости ---
 echo "==> venv + pip install -e ."
-sudo -u "$RUN_USER" python3 -m venv "$PROJECT_DIR/.venv"
+"$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))' \
+  || { echo "Нужен Python ≥3.11: $($PYTHON --version 2>&1). Передай PYTHON=python3.11"; exit 1; }
+sudo -u "$RUN_USER" "$PYTHON" -m venv "$PROJECT_DIR/.venv"
 sudo -u "$RUN_USER" "$PROJECT_DIR/.venv/bin/pip" install --upgrade pip >/dev/null
 sudo -u "$RUN_USER" "$PROJECT_DIR/.venv/bin/pip" install -e "$PROJECT_DIR"
 
@@ -83,6 +89,7 @@ ERR_CHANNEL_ID=${ERR_CHANNEL_ID:-}
 SEND_CHANNEL_ID=${SEND_CHANNEL_ID:-}
 BACKUP_CHANNEL_ID=${BACKUP_CHANNEL_ID:-}
 BACKUP_EVERY_HOURS=${BACKUP_EVERY_HOURS:-12}
+API_PORT=${API_PORT:-8080}
 LOG_LEVEL=INFO
 ENV
   chown "$RUN_USER":"$RUN_USER" "$ENV_FILE"; chmod 600 "$ENV_FILE"
@@ -115,6 +122,13 @@ sleep 2
 for u in "${UNITS[@]}"; do
   systemctl --no-pager --full status "$u" | head -8 || true
 done
+
+# --- API на своём домене ---
+if [[ -n "${API_DOMAIN:-}" && " ${UNITS[*]} " == *" mailer-api "* ]]; then
+  echo "==> API на домене $API_DOMAIN (Cloudflare + nginx)"
+  "$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/deploy/api_domain.py" "$API_DOMAIN" \
+    || echo "   ⚠️ домен API не настроен — повтори: sudo $PROJECT_DIR/.venv/bin/python deploy/api_domain.py $API_DOMAIN"
+fi
 
 echo "==> Готово. Логи: journalctl -u mailerbot -f  (и -u mailer-api / -u mailer-userbot)"
 echo "    Таблицы создаются ботом при старте (create_all + ensure-колонки)."
