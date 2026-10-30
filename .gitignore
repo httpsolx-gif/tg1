@@ -20,3 +20,4 @@ userbot/media/
 
 # deploy/update.sh
 .update.lock
+*.egg-info/
