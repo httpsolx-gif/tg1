@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 
@@ -106,8 +107,13 @@ async def bc_back(cq: CallbackQuery, state: FSMContext):
         await cq.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    from bot.handlers.admin.index import back_to_admin
-    await back_to_admin(cq)
+    # BC живёт внутри ALERT — назад туда, а не в админку
+    from bot.handlers.admin.alert import kb_alert_root, ALERT_TITLE
+    try:
+        await cq.message.edit_text(ALERT_TITLE, reply_markup=kb_alert_root())
+    except TelegramBadRequest:
+        await cq.message.answer(ALERT_TITLE, reply_markup=kb_alert_root())
+    await cq.answer()
 
 
 # ------------------------------- вкл/выкл, запуск -------------------------------

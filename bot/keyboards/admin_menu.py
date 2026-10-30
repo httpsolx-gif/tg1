@@ -3,14 +3,15 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 ADMIN_BUTTONS = [
     ["📧 SMTP",  "🔗 SHORT", "🧩 SRVS",  "📊 STATS"],
     ["👥 USERS", "🛡 API",   "🧪 TEST",  "🚨 ALERT"],
-    ["🖥 NODES", "💾 BACKUP", "🕵️ SPAM", "📣 BC"],
+    ["🖥 NODES", "💾 BACKUP"],
 ]
 
-# Разделы для ИНЛАЙН-меню. Убраны из меню: MAIL, TEMPL (в рубрики), AWS (внутрь NODES).
+# Разделы для ИНЛАЙН-меню. Убраны из меню: MAIL, TEMPL (в рубрики), AWS (внутрь NODES),
+# SPAM (внутрь TEST), BC (внутрь ALERT).
 ADMIN_SECTIONS = [
     ("📧 SMTP", "smtp"), ("🔗 SHORT", "short"), ("🧩 SRVS", "srvs"), ("📊 STATS", "stats"),
     ("👥 USERS", "users"), ("🛡 API", "api"), ("🧪 TEST", "test"), ("🚨 ALERT", "alert"),
-    ("🖥 NODES", "nodes"), ("💾 BACKUP", "backup"), ("🕵️ SPAM", "spam"), ("📣 BC", "bc"),
+    ("🖥 NODES", "nodes"), ("💾 BACKUP", "backup"),
 ]
 
 
@@ -28,7 +29,7 @@ def admin_menu_inline() -> InlineKeyboardMarkup:
 
 def admin_menu() -> ReplyKeyboardMarkup:
     rows = []
-    # Основные разделы (2 строки × 4 кнопки)
+    # Основные разделы (строки по 4 кнопки)
     for row in ADMIN_BUTTONS:
         rows.append([KeyboardButton(text=txt) for txt in row])
     # «Назад» отдельной строкой

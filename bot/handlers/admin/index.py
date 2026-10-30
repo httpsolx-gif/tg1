@@ -114,6 +114,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
     from bot.handlers.admin.api import kb_api_root
     from bot.handlers.admin.spamcheck import kb_spamcheck_root
     from bot.handlers.admin.broadcast import kb_broadcast_root, _root_text as bc_root_text
+    from bot.handlers.admin.alert import kb_alert_root, ALERT_TITLE
 
     screens = {
         "smtp": ("SMTP — выберите действие:", kb_smtp_root),
@@ -128,6 +129,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         "api": ("🛡 <b>API</b> — токены публичного API:", kb_api_root),
         "spam": ("🕵️ <b>SPAM-check</b> — сид-ящики и проверка размещения:", kb_spamcheck_root),
         "bc": (bc_root_text(), kb_broadcast_root),
+        "alert": (ALERT_TITLE, kb_alert_root),
     }
     if sec in screens:
         title, kb_fn = screens[sec]
@@ -139,9 +141,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         return
 
     # заглушки — просто текст + кнопка назад в админку
-    stubs = {
-        "alert": "🚨 ALERT — настройки тревог/уведомлений (подключим далее).",
-    }
+    stubs = {}
     text = stubs.get(sec, "Раздел не найден.")
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")]])

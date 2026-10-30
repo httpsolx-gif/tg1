@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import List, Tuple
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Document
 from aiogram.fsm.context import FSMContext
 from sqlmodel import Session, select, desc
@@ -121,8 +122,13 @@ async def spam_back(cq: CallbackQuery, state: FSMContext):
         await cq.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
-    from bot.handlers.admin.index import back_to_admin
-    await back_to_admin(cq)
+    # SPAM-check живёт внутри TEST — назад туда, а не в админку
+    from bot.handlers.admin.test import kb_test_root, TEST_TITLE
+    try:
+        await cq.message.edit_text(TEST_TITLE, reply_markup=kb_test_root())
+    except TelegramBadRequest:
+        await cq.message.answer(TEST_TITLE, reply_markup=kb_test_root())
+    await cq.answer()
 
 
 # ---------- add ----------

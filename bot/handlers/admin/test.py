@@ -48,6 +48,7 @@ def kb_test_root() -> InlineKeyboardMarkup:
         [_btn("🔗 Тест сокращателей", "test:short")],
         [_btn("📧 Тест SMTP", "test:smtp")],
         [_btn("🖥 Тест нод", "test:nodes")],
+        [_btn("🕵️ Проверка на спам", "spam:root")],  # SPAM-check (раньше — отдельный раздел меню)
         [_btn("⬅️ Назад", "admin:back")],
     ])
 
@@ -55,7 +56,10 @@ def kb_test_root() -> InlineKeyboardMarkup:
 async def show_test_root(m: Message):
     if not _admin(m.from_user.id):
         return
-    await m.answer("🧪 <b>TEST</b> — проверки и удаление нерабочих:", reply_markup=kb_test_root())
+    await m.answer(TEST_TITLE, reply_markup=kb_test_root())
+
+
+TEST_TITLE = "🧪 <b>TEST</b> — проверки и удаление нерабочих:"
 
 
 @router.callback_query(F.data == "test:root")
@@ -64,9 +68,9 @@ async def test_root(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     try:
-        await cq.message.edit_text("🧪 <b>TEST</b> — проверки и удаление нерабочих:", reply_markup=kb_test_root())
+        await cq.message.edit_text(TEST_TITLE, reply_markup=kb_test_root())
     except Exception:
-        await cq.message.answer("🧪 <b>TEST</b> — проверки и удаление нерабочих:", reply_markup=kb_test_root())
+        await cq.message.answer(TEST_TITLE, reply_markup=kb_test_root())
     await cq.answer()
 
 
