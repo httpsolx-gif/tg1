@@ -444,8 +444,8 @@ async def rub_edit_value(m: Message, state: FSMContext):
 # ═══════════ SRVS: меню (Рубрики + Сервисы) ═══════════
 def kb_srvs_root() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧩 Сервисы", callback_data="svc:root")],
         [InlineKeyboardButton(text="🗂 Рубрики", callback_data="rub:root")],
-        [InlineKeyboardButton(text="🧩 Сервисы (шаблон/тайтл/имя)", callback_data="svc:root")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="rub:back")],
     ])
 
