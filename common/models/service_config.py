@@ -20,4 +20,9 @@ class ServiceRubricConfig(SQLModel, table=True):
     title: str | None = None
     template_html: str | None = None  # переопределение шаблона (иначе — по рубрике)
     template_name: str | None = None  # имя файла, из которого поставлен шаблон (п.65, для карточки)
-    uniq_opts: str | None = None  # JSON настроек уникализации htmlmix (п.106); None = выкл/дефолт
+    # уникализация htmlmix (п.106/107): настройки + текущий активный вариант
+    uniq_opts: str | None = None   # JSON {on, mode, times, opts}; None = выкл/дефолт
+    uniq_html: str | None = None   # текущий сгенерированный вариант шаблона
+    uniq_sig: str | None = None    # хэш(исходный шаблон + опции) на момент генерации
+    uniq_at: str | None = None     # когда сгенерирован (ISO, UTC)
+    uniq_slot: str | None = None   # последний отработанный слот расписания 'YYYY-MM-DD HH:MM'

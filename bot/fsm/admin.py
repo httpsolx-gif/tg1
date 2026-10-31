@@ -70,6 +70,10 @@ class ServiceCfgEdit(StatesGroup):
     value = State()
 
 
+class UniqTimes(StatesGroup):
+    value = State()
+
+
 class SmtpLimit(StatesGroup):
     """Ввод числового лимита отправок (на аккаунт или группу)."""
     value = State()

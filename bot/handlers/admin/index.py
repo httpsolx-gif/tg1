@@ -11,7 +11,7 @@ from bot.fsm.admin import (
     SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, TemplateUpload, RubricAdd, RubricEdit,
     RubricMailboxAdd, MailboxAdd, MailboxDomains, ScopeInput, SmtpLimit,
     ServiceCfgEdit, ShortDomainAdd, AccessAdd, UserFlow, ApiTokenFlow, SpamSeedAdd,
-    BroadcastFlow, CatalogEdit, TemplateAssign,
+    BroadcastFlow, CatalogEdit, TemplateAssign, UniqTimes,
 )
 
 router = Router()
@@ -50,7 +50,7 @@ async def admin_entry(m: Message):
         BroadcastFlow.targets, BroadcastFlow.caption, BroadcastFlow.photo,
         BroadcastFlow.interval, BroadcastFlow.cap, BroadcastFlow.delays,
         CatalogEdit.country, CatalogEdit.services,
-        TemplateAssign.pick,
+        TemplateAssign.pick, UniqTimes.value,
     ),
     F.text.func(lambda t: isinstance(t, str) and _strip(t) in MENU_TEXTS),
 )

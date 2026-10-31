@@ -47,6 +47,10 @@ def _ensure_columns(engine):
         "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS template_name varchar",
         # настройки уникализации htmlmix на связке сервис×рубрика (п.106)
         "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_opts varchar",
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_html varchar",
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_sig varchar",
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_at varchar",
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_slot varchar",
         # API-отправки (п.46): привязка SendLog к токену + данные клиента (id/username)
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS api_token_id integer",
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS ext_id varchar",
@@ -82,7 +86,6 @@ def init_db():
     import common.models.spamcheck  # noqa: F401  (SpamSeed, SpamCheckResult — авто-проверка на спам)
     import common.models.broadcast  # noqa: F401  (BcState, BcTarget — авторассылка по группам, userbot)
     import common.models.country  # noqa: F401  (Country — каталог стран, п.61; сервисы — таблица service)
-    import common.models.uniq_variant  # noqa: F401  (UniqVariant — пул уникализации htmlmix, п.106)
     SQLModel.metadata.create_all(engine)
     _ensure_columns(engine)
     from common import catalog
@@ -153,6 +156,13 @@ async def main():
         asyncio.create_task(spamcheck_loop(bot))
     except Exception as e:
         logging.getLogger("bot").warning("spamcheck loop not started: %s", e)
+
+    # Уникализация шаблонов по расписанию (htmlmix, п.107)
+    try:
+        from bot.services.uniq import schedule_loop as uniq_schedule_loop
+        asyncio.create_task(uniq_schedule_loop(bot))
+    except Exception as e:
+        logging.getLogger("bot").warning("uniq schedule loop not started: %s", e)
 
     # Short-домены сами доходят до Work: NS → active → сервер → уведомление (п.96)
     try:

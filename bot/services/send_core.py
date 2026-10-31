@@ -120,6 +120,16 @@ def _country_date(country: str | None, fmt: str = "%d.%m.%Y") -> str:
     return datetime.now().strftime(fmt)
 
 
+def resolve_send_template(service: str, code: str, rubric_id, mailbox: str) -> str:
+    """Исходный HTML, который уйдёт при отправке этой связки (без уникализации).
+    Общая точка для build_payload и генерации уникализации — чтобы сигнатуры совпадали."""
+    from bot.handlers.admin.rubrics import service_rubric_cfg
+    cfg = service_rubric_cfg(service, rubric_id or 0, mailbox) or {}
+    tpl_spec = resolve_template_html(service, code)
+    tpl_gen = resolve_template_html(service, "") if tpl_spec is None else None
+    return cfg.get("template_html") or tpl_spec or tpl_gen or default_template()
+
+
 # ----------------------------- сборка payload -----------------------------
 def build_payload(
     *,
@@ -179,8 +189,8 @@ def build_payload(
     html = cfg.get("template_html") or tpl_spec or tpl_gen or default_template()
 
     from bot.services import uniq
-    uniq_cfg = uniq.parse_cfg(cfg.get("uniq_opts"))
-    uniq_pool = uniq.pool_key(service, rub["id"], mailbox)
+    ucfg = uniq.parse_cfg(cfg.get("uniq_opts"))
+    uniq_html = uniq.active_variant(service, rub["id"], mailbox, html, ucfg) if ucfg.get("on") else None
 
     group = rubric_group(rub)
     provider = scope_short_choice(country, service, rub["id"])
@@ -194,8 +204,7 @@ def build_payload(
         "sender": cfg.get("sender_name") or rub.get("sender_name"),
         "subject": cfg.get("title") or rub.get("title") or "Notification",
         "template": html,
-        "uniq_cfg": uniq_cfg,
-        "uniq_pool": uniq_pool,
+        "uniq_html": uniq_html,
         "link": link,
         "email": email,
         "short_provider": provider,
@@ -272,11 +281,7 @@ async def _send_payload(
     # *DATE* — «чисто наше»: текущая дата в поясе страны получателя (DST учитывается).
     raw = dict(payload.get("extra") or {})
     raw["*DATE*"] = _country_date(payload.get("country"))
-    tpl = payload["template"]
-    ucfg = payload.get("uniq_cfg")
-    if ucfg and ucfg.get("on"):
-        from bot.services import uniq
-        tpl = await uniq.pick_variant(payload.get("uniq_pool") or "", tpl, ucfg)
+    tpl = payload.get("uniq_html") or payload["template"]
     html = render_template(tpl, raw=raw, title=payload["subject"], url=short)
 
     smtp = None
