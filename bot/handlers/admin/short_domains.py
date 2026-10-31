@@ -241,6 +241,14 @@ async def sdom_in_domain(m: Message, state: FSMContext):
 
 
 async def _ask_node(m: Message, state: FSMContext, head: str = "") -> None:
+    with Session(_engine) as db:
+        nodes = db.exec(select(Node).where(Node.is_active == True)).all()  # noqa: E712
+    short_nodes = [n for n in nodes if n.has_role("short")]
+    if len(short_nodes) == 1:  # единственная short-нода — выбираем сами, без вопроса
+        n = short_nodes[0]
+        await m.answer(head + f"🖥 Origin-нода: <code>{_esc(n.login)}@{_esc(n.ip)}</code> (единственная с ролью short)")
+        await _create_domain(m, state, n.id, m.from_user.id)
+        return
     await state.set_state(ShortDomainAdd.node)
     note, kb = _nodes_kb()
     await m.answer(head + "🖥 Выберите <b>origin-ноду</b> (где встанет редирект за CF):" + note, reply_markup=kb)
@@ -283,24 +291,31 @@ async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
     if not _admin(cq.from_user.id):
         await cq.answer("Нет доступа", show_alert=True)
         return
-    node_id = int(cq.data.split(":")[2])
+    await cq.answer()
+    try:
+        await cq.message.delete()  # убрать список нод
+    except Exception:
+        pass
+    await _create_domain(cq.message, state, int(cq.data.split(":")[2]), cq.from_user.id)
+
+
+async def _create_domain(msg: Message, state: FSMContext, node_id: int, uid: int) -> None:
+    """Создать зону CF и запись домена на выбранной ноде; ответы — новыми сообщениями в чат msg."""
     data = await state.get_data()
     await state.clear()
     domain, zone = data["domain"], data["zone_name"]
     token, email, bind_sid = keys.get("cf"), None, int(data.get("bind_sid") or 0)
     if not token:
-        await cq.message.edit_text("🔴 Нет токена Cloudflare — задайте в OTHER → 🔑 Ключи.")
-        await cq.answer()
+        await msg.answer("🔴 Нет токена Cloudflare — задайте в OTHER → 🔑 Ключи.")
         return
     registrar = await _detect_registrar(zone)
 
-    await cq.message.edit_text(f"⏳ Создаю зону <code>{_esc(zone)}</code> в Cloudflare…")
+    wait = await msg.answer(f"⏳ Создаю зону <code>{_esc(zone)}</code> в Cloudflare…")
     try:
         zone_id, ns = await cf.create_zone(token, zone)
     except Exception as e:
-        await cq.message.answer(f"🔴 Не удалось создать зону: <code>{_esc(str(e)[:250])}</code>",
-                                reply_markup=_list_kb(cq.from_user.id))
-        await cq.answer()
+        await wait.edit_text(f"🔴 Не удалось создать зону: <code>{_esc(str(e)[:250])}</code>",
+                             reply_markup=_list_kb(uid))
         return
 
     with Session(_engine) as db:
@@ -323,7 +338,7 @@ async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
         db.add(d)
         db.commit()
         db.refresh(d)
-        did = d.id
+        did, ns1, ns2 = d.id, d.ns1, d.ns2  # до commit ниже: после него объект истекает
         # привязка к области, из которой пришли (ссылки не укоротятся, пока статус != ready)
         if bind_sid:
             cfg = db.get(ScopeCfg, bind_sid)
@@ -335,12 +350,13 @@ async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
     bind_note = "\n\n🔗 Домен уже выбран как SHORT для области (заработает после готовности)." if bind_sid else ""
     ns_note = (f"Нажмите «⚡ Авто-NS ({_REG_RU[registrar]})» ниже — пропишу сам."
                if registrar else "Ключа регистратора нет (OTHER → 🔑 Ключи) — смените NS у регистратора вручную.")
-    await cq.message.answer(
+    await wait.edit_text(
         "✅ Зона создана. Нужно прописать домену NS Cloudflare:\n"
-        f"   <code>{_esc(d.ns1 or '')}</code>\n   <code>{_esc(d.ns2 or '')}</code>\n\n"
+        f"   <code>{_esc(ns1 or '')}</code>\n   <code>{_esc(ns2 or '')}</code>\n\n"
         + ns_note + " Как пропишется (минуты–часы) — жмите «Проверить NS»." + bind_note,
     )
-    await _show_card(cq, did)
+    text, kb = _card(did)
+    await msg.answer(text, reply_markup=kb)
 
 
 # ======================= авто-NS у регистратора (NameSilo) =======================
