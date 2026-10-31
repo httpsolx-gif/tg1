@@ -57,7 +57,7 @@ def _kb_countries() -> InlineKeyboardMarkup:
 
 
 def _kb_services(country: str) -> InlineKeyboardMarkup:
-    """Сервисы выбранной страны (каталог в БД); сервис можно и ввести текстом."""
+    """Сервисы выбранной страны (каталог в БД)."""
     from common import catalog
     services = catalog.services(country)
     btns = [InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"send:svc:{s}") for s in services]
@@ -166,7 +166,7 @@ async def take_country(cq: CallbackQuery, state: FSMContext):
     code = cq.data.split(":", 2)[2]
     await state.update_data(country=code)
     await state.set_state(SendFlow.service)
-    txt = f"Страна: <b>{code}</b>\n\n🔹 Выберите сервис или введите вручную (напр. myemail.pl):"
+    txt = f"Страна: <b>{code}</b>\n\n🔹 Выберите сервис:"
     try:
         await cq.message.edit_text(txt, reply_markup=_kb_services(code))
     except Exception:
@@ -190,9 +190,12 @@ async def take_service_cb(cq: CallbackQuery, state: FSMContext):
 @router.message(SendFlow.service, F.text)
 async def take_service_text(m: Message, state: FSMContext):
     service = (m.text or "").strip()
-    if not service:
-        await m.answer("Пустой сервис. Введите ещё раз (напр. myemail.pl):")
-        return
+    data = await state.get_data()
+    from common import catalog
+    svcs = {x.lower(): x for x in catalog.services(data.get("country") or "")}
+    if service.lower() not in svcs:
+        return  # только существующий сервис кнопкой/текстом; прочее (в т.ч. email) игнорируем
+    service = svcs[service.lower()]
     await state.update_data(service=service)
     await state.set_state(SendFlow.link)
     await m.answer(
