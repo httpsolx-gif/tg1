@@ -682,14 +682,17 @@ def _svc_cfg_view(code: str, service: str, rid: int, mailbox: str):
     with Session(_engine) as db:
         sid = get_or_create(db, code, service, rid).id
     text += "\n\n" + scope_ops.ops_text(sid)
+    ops = scope_ops.ops_rows(sid)
+    # порядок: Автосмена → Имя | Тайтл → SMTP | SHORT
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        ops[0],
         [
             InlineKeyboardButton(text="👤 Имя", callback_data=f"svc:e:sn:{code}:{service}:{rid}:{mailbox}"),
             InlineKeyboardButton(text="🏷 Тайтл", callback_data=f"svc:e:st:{code}:{service}:{rid}:{mailbox}"),
         ],
         *([[InlineKeyboardButton(text="🗑 Шаблон", callback_data=f"svc:tpldel:{code}:{service}:{rid}")]]
           if _own_template_name(service, rid) else []),
-        *scope_ops.ops_rows(sid),
+        *ops[1:],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:s:{code}:{service}")],
     ])
     return text, kb
