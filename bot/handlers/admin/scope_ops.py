@@ -275,15 +275,17 @@ async def sco_short(cq: CallbackQuery):
         cur = db.get(ScopeCfg, sid).short
         # все личные домены, и поднимающиеся тоже (п.94): пока не Work, ссылки идут полными
         doms = db.exec(select(ShortDomain).order_by(ShortDomain.id)).all()
-    mark = lambda v: " ⬅️" if v == cur else ""  # noqa: E731
-    rows = [[_btn(f"🔗 {p}{mark(p)}", f"sco:shset:{sid}:{p}")] for p in SHORT_PROVIDERS]
+    # только ✅ рабочий / ❌ ещё не поднят (п.98); текущий выбор — в заголовке
+    rows = [[_btn(f"✅ {p}", f"sco:shset:{sid}:{p}")] for p in SHORT_PROVIDERS]
+    names = {p: p for p in SHORT_PROVIDERS} | {"off": "не сокращать"}
     for d in doms:
-        st = "Work" if d.status == "ready" else "Pending"
-        rows.append([_btn(f"🌐 {d.domain} · {st}{mark(f'dom:{d.id}')}", f"sco:shdom:{sid}:{d.id}")])
-    rows.append([_btn(f"🚫 Не сокращать{mark('off')}", f"sco:shset:{sid}:off")])
+        rows.append([_btn(f"{'✅' if d.status == 'ready' else '❌'} {d.domain}", f"sco:shdom:{sid}:{d.id}")])
+        names[f"dom:{d.id}"] = d.domain
+    rows.append([_btn("Не сокращать", f"sco:shset:{sid}:off")])
     rows.append([_btn("⬅️ Назад", f"sco:card:{sid}")])
-    await cq.message.edit_text("⚙️ SHORT для области — выберите сокращатель:\n"
-                               "<i>Pending — домен ещё поднимается, до Work ссылки уходят полными.</i>",
+    now = f"Сейчас: <b>{_esc(names.get(cur, cur))}</b>" if cur else "Сейчас: как у ALL / выше"
+    await cq.message.edit_text(f"⚙️ SHORT для области\n{now}\n"
+                               "<i>❌ — домен ещё поднимается, до ✅ ссылки уходят полными.</i>",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await cq.answer()
 
