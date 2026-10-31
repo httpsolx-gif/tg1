@@ -54,7 +54,7 @@ def _limtxt(sid: int, kind: str, a, cfg: ScopeCfg | None = None) -> str:
 
 
 def _auto_txt(cfg: ScopeCfg) -> str:
-    lim = f"смена каждые {cfg.switch_limit}" if cfg.switch_limit else "по лимитам аккаунтов"
+    lim = f"каждые {cfg.switch_limit}" if cfg.switch_limit else "по лимитам аккаунтов"
     base = f"{'вкл' if cfg.autoswitch else 'выкл'} · {lim}"
     return base + (" · по кругу" if cfg.wrap else "")
 
@@ -158,19 +158,9 @@ def _auto_view(sid: int):
     with Session(_engine) as db:
         cfg = db.get(ScopeCfg, sid)
         cur = next(((k, a) for k, a in sc.entries(db, sid) if sc.key(k, a) == cfg.current_key), None)
-    cur_txt = (f"Текущий: <code>{_esc(sc.acc_email(*cur))}</code> ({'AWS' if cur[0] == 'aws' else 'SMTP'})\n\n"
+    cur_txt = (f"\nТекущий: <code>{_esc(sc.acc_email(*cur))}</code> ({'AWS API' if cur[0] == 'aws' else 'SMTP'})"
                if cur else "")
-    text = (
-        f"🔁 Автосмена: <b>{_auto_txt(cfg)}</b>\n"
-        f"{cur_txt}"
-        "⏭ Принуд. смена — сразу перейти на следующий аккаунт базы.\n\n"
-        "Лимит автосмены — сколько писем отправить с одного аккаунта базы (SMTP или AWS), прежде чем перейти на следующий. "
-        "0 = по собственным лимитам аккаунтов (⚙️ SMTP).\n\n"
-        f"🔄 По кругу: <b>{'вкл' if cfg.wrap else 'выкл'}</b> — когда база заканчивается "
-        "(все аккаунты выбрали лимит), счётчики сбрасываются и отправка продолжается "
-        "с первого, а не останавливается.\n"
-        "<i>Счётчики автосмены считаются отдельно по каждому сервису/области.</i>"
-    )
+    text = f"🔁 Автосмена: <b>{_auto_txt(cfg)}</b>{cur_txt}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [_btn("🔴 Выключить" if cfg.autoswitch else "🟢 Включить", f"sco:autotog:{sid}")],
         [_btn(f"📈 Лимит автосмены: {cfg.switch_limit or '—'}", f"sco:autolim:{sid}")],
