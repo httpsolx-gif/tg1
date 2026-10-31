@@ -52,13 +52,24 @@ async def get_zone(token: str, name: str) -> Optional[dict]:
     return res or None
 
 
-async def create_zone(token: str, name: str) -> tuple[str, list[str]]:
-    """Создать зону (или вернуть существующую). → (zone_id, [nameservers])."""
+async def create_zone(token: str, name: str, *, recreate: bool = False) -> tuple[str, list[str]]:
+    """Создать зону. → (zone_id, [nameservers]).
+
+    recreate=True: если зона уже есть в аккаунте — удалить и создать заново (чистая зона,
+    без старых DNS-записей, которые могли светить IP). Иначе существующая подхватывается.
+    """
+    if recreate:
+        z = await get_zone(token, name)
+        if z:
+            await _api(token, "DELETE", f"/zones/{z['id']}")
     try:
         res = await _api(token, "POST", "/zones", json={"name": name, "type": "full"})
     except CFError as e:
-        # 1061 — зона уже существует: подхватываем её
+        # 1061 — зона уже существует: подхватываем её (при recreate сюда попадаем,
+        # только если зона в ЧУЖОМ аккаунте CF — её не удалить)
         if 1061 in _errcodes(e):
+            if recreate:
+                raise CFError(f"зона {name} уже есть в другом аккаунте Cloudflare — удалите её там") from e
             z = await get_zone(token, name)
             if not z:
                 raise

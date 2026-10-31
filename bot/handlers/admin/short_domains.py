@@ -310,9 +310,15 @@ async def _create_domain(msg: Message, state: FSMContext, node_id: int, uid: int
         return
     registrar = await _detect_registrar(zone)
 
-    wait = await msg.answer(f"⏳ Создаю зону <code>{_esc(zone)}</code> в Cloudflare…")
+    # зона уже есть в CF → пересоздаём (чистая, без старых записей); но не если в ней живут
+    # другие наши short-домены (поддомены той же apex-зоны) — их бы снесло
+    with Session(_engine) as db:
+        shared = db.exec(select(ShortDomain).where(ShortDomain.zone_name == zone,
+                                                   ShortDomain.domain != domain)).first()
+    wait = await msg.answer(f"⏳ Создаю зону <code>{_esc(zone)}</code> в Cloudflare…"
+                            + ("" if shared else "\n<i>Если зона уже есть — удалю и создам заново.</i>"))
     try:
-        zone_id, ns = await cf.create_zone(token, zone)
+        zone_id, ns = await cf.create_zone(token, zone, recreate=not shared)
     except Exception as e:
         await wait.edit_text(f"🔴 Не удалось создать зону: <code>{_esc(str(e)[:250])}</code>",
                              reply_markup=_list_kb(uid))
