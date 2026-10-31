@@ -578,6 +578,21 @@ async def sdom_stats(cq: CallbackQuery):
 
 
 # ======================= удаление =======================
+def delete_domains(db: Session, ids: list[int]) -> int:
+    """Удалить домены из бота (CF-зона и сервис на ноде остаются) и снять ссылки областей на них."""
+    n = 0
+    for did in ids:
+        d = db.get(ShortDomain, did)
+        if d:
+            db.delete(d)
+            n += 1
+        for cfg in db.exec(select(ScopeCfg).where(ScopeCfg.short == f"dom:{did}")).all():
+            cfg.short, cfg.short_at = None, None
+            db.add(cfg)
+    db.commit()
+    return n
+
+
 @router.callback_query(F.data.startswith("sdom:del:"))
 async def sdom_del(cq: CallbackQuery):
     if not _admin(cq.from_user.id):
@@ -600,13 +615,6 @@ async def sdom_del_yes(cq: CallbackQuery):
         return
     did = int(cq.data.split(":")[2])
     with Session(_engine) as db:
-        d = db.get(ShortDomain, did)
-        if d:
-            db.delete(d)
-        # снять ссылки областей на этот домен
-        for cfg in db.exec(select(ScopeCfg).where(ScopeCfg.short == f"dom:{did}")).all():
-            cfg.short, cfg.short_at = None, None
-            db.add(cfg)
-        db.commit()
+        delete_domains(db, [did])
     await cq.message.edit_text("🌐 Личные short-домены:", reply_markup=_list_kb(cq.from_user.id))
     await cq.answer("Удалён")

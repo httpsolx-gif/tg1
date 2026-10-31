@@ -314,8 +314,105 @@ async def sco_short_set(cq: CallbackQuery):
     await _show(cq, sid, "SHORT сохранён")
 
 
+# ---------- 🗑 SHORT: удаление личных short-доменов (как 🗑 SMTP) ----------
+_SHD_NOTE = "<i>Удаляются из бота; зона в Cloudflare и сервис на ноде остаются.</i>"
+
+
 @router.callback_query(F.data.startswith("sco:shdel:"))
 async def sco_short_del(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    sid = _scope_id(cq)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [_btn("🧽 Выборочно", f"sco:shdpick:{sid}"), _btn("🗑 Неиспользуемые", f"sco:shdunused:{sid}")],
+        [_btn("💥 Все", f"sco:shdall:{sid}")],
+        [_btn("↩️ Сбросить SHORT области", f"sco:shreset:{sid}")],
+        [_btn("⬅️ Назад", f"sco:card:{sid}")],
+    ])
+    await cq.message.edit_text(
+        "🗑 Удалить short-домены:\n<i>Неиспользуемые = не выбраны SHORT ни в одной области.</i>\n"
+        "<i>«Сбросить» — только убрать SHORT у этой области (будет как у ALL / выше).</i>", reply_markup=kb)
+    await cq.answer()
+
+
+def _kb_shd_pick(sid: int) -> InlineKeyboardMarkup:
+    from common.models.short_domain import ShortDomain
+    with Session(_engine) as db:
+        doms = db.exec(select(ShortDomain).order_by(ShortDomain.id)).all()
+    rows = [[_btn(f"🗑 {d.domain} ({d.status})", f"sco:shdx:{sid}:{d.id}")] for d in doms]
+    rows = rows or [[_btn("Доменов нет", f"sco:card:{sid}")]]
+    rows.append([_btn("⬅️ Назад", f"sco:shdel:{sid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("sco:shdpick:"))
+async def sco_short_del_pick(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    sid = _scope_id(cq)
+    await cq.message.edit_text(f"🧽 Нажмите на домен, чтобы удалить:\n{_SHD_NOTE}", reply_markup=_kb_shd_pick(sid))
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("sco:shdx:"))
+async def sco_short_del_one(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    from bot.handlers.admin.short_domains import delete_domains
+    _, _, sid, did = cq.data.split(":", 3)
+    sid = int(sid)
+    with Session(_engine) as db:
+        delete_domains(db, [int(did)])
+    await cq.message.edit_text(f"🧽 Нажмите на домен, чтобы удалить:\n{_SHD_NOTE}", reply_markup=_kb_shd_pick(sid))
+    await cq.answer("Удалён")
+
+
+@router.callback_query(F.data.startswith("sco:shdunused:"))
+async def sco_short_del_unused(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    from common.models.short_domain import ShortDomain
+    from bot.handlers.admin.short_domains import delete_domains
+    sid = _scope_id(cq)
+    with Session(_engine) as db:
+        used = {c.short for c in db.exec(select(ScopeCfg).where(ScopeCfg.short.is_not(None))).all()}
+        ids = [d.id for d in db.exec(select(ShortDomain)).all() if f"dom:{d.id}" not in used]
+        n = delete_domains(db, ids)
+    await _show(cq, sid, f"Удалено неиспользуемых: {n}")
+
+
+@router.callback_query(F.data.startswith("sco:shdall:"))
+async def sco_short_del_all(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    sid = _scope_id(cq)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [_btn("✅ Да, удалить всё", f"sco:shdallyes:{sid}"), _btn("❌ Нет", f"sco:shdel:{sid}")],
+    ])
+    await cq.message.edit_text(f"💥 Удалить ВСЕ личные short-домены из бота?\n{_SHD_NOTE}", reply_markup=kb)
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("sco:shdallyes:"))
+async def sco_short_del_all_yes(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    from common.models.short_domain import ShortDomain
+    from bot.handlers.admin.short_domains import delete_domains
+    sid = _scope_id(cq)
+    with Session(_engine) as db:
+        n = delete_domains(db, [d.id for d in db.exec(select(ShortDomain)).all()])
+    await _show(cq, sid, f"Удалено: {n}")
+
+
+@router.callback_query(F.data.startswith("sco:shreset:"))
+async def sco_short_reset(cq: CallbackQuery):
     if not _admin(cq.from_user.id):
         await cq.answer("Нет доступа", show_alert=True)
         return
@@ -325,7 +422,7 @@ async def sco_short_del(cq: CallbackQuery):
         cfg.short, cfg.short_at = None, None
         db.add(cfg)
         db.commit()
-    await _show(cq, sid, "SHORT удалён")
+    await _show(cq, sid, "SHORT области сброшен")
 
 
 # ---------- SMTP-база: загрузка ----------
