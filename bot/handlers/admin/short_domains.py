@@ -409,6 +409,10 @@ async def _activate(did: int) -> tuple[str, str | None]:
     try:
         await cf.set_ssl(token, zone_id, "full")
         await cf.always_use_https(token, zone_id, True)
+        try:  # анти-флуд на краю CF; не встало (нет прав WAF у токена) — домен всё равно поднимаем
+            await cf.set_rate_limit(token, zone_id)
+        except Exception as e:
+            log.warning("short %s: rate limit CF не поставлен: %s", domain, e)
         rid = await cf.upsert_a_record(token, zone_id, domain, origin_ip, proxied=True)
         leaks = await cf.hide_origin_ip(token, zone_id, origin_ip)
         if leaks:

@@ -100,6 +100,30 @@ async def always_use_https(token: str, zone_id: str, on: bool = True) -> None:
                json={"value": "on" if on else "off"})
 
 
+RATE_LIMIT_DESC = "mailer: rate limit (short)"
+
+
+async def set_rate_limit(token: str, zone_id: str, requests: int = 30) -> None:
+    """Rate limit на зону: > requests запросов за 10 с с одного IP → блок на 10 с.
+
+    Рамки Free-плана: 1 правило, период/таймаут 10 с, счёт по IP (+colo), в выражении
+    только путь. PUT entrypoint фазы http_ratelimit заменяет набор целиком — зона наша.
+    """
+    rule = {
+        "description": RATE_LIMIT_DESC,
+        "expression": '(http.request.uri.path ne "/healthz")',
+        "action": "block",
+        "ratelimit": {
+            "characteristics": ["cf.colo.id", "ip.src"],
+            "period": 10,
+            "requests_per_period": int(requests),
+            "mitigation_timeout": 10,
+        },
+    }
+    await _api(token, "PUT", f"/zones/{zone_id}/rulesets/phases/http_ratelimit/entrypoint",
+               json={"rules": [rule]})
+
+
 async def create_origin_cert(token: str, hostnames: list[str], csr: str,
                              validity_days: int = 5475) -> tuple[str, str]:
     """Выпустить origin-сертификат по CSR. → (cert_pem, cert_id).

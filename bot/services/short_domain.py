@@ -128,14 +128,38 @@ async def personal_short(provider: str, target: str, track: str | None = None) -
 # историчен, в редиректе не нужен; cert/key — для TLS).
 # ---------------------------------------------------------------------------
 REDIRECT_SERVICE_SRC = r'''#!/usr/bin/env python3
-import datetime, json, os, sqlite3, ssl, sys, threading
+import datetime, json, os, socket, sqlite3, ssl, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONF_DIR = "/etc/shortcf"
 CLICK_DB = os.environ.get("SHORTCF_DB", "/var/lib/shortcf/clicks.db")
 PORT = int(os.environ.get("SHORTCF_PORT", "443"))
 
+# анти-флуд: TLS-рукопожатие в потоке соединения с таймаутом (не в accept), потолок
+# одновременных соединений, таймаут простоя, лимит запросов на посетителя (CF-Connecting-IP)
+MAX_CONN = int(os.environ.get("SHORTCF_MAX_CONN", "200"))
+IO_TIMEOUT = float(os.environ.get("SHORTCF_TIMEOUT", "10"))
+RATE_N = int(os.environ.get("SHORTCF_RATE_N", "30"))       # запросов
+RATE_WIN = float(os.environ.get("SHORTCF_RATE_WIN", "10"))  # за столько секунд
+
 _DBLOCK = threading.Lock()
+_RLOCK = threading.Lock()
+_HITS = {}  # ip -> [начало окна, счётчик]
+_LAST_PRUNE = [0.0]
+
+def rate_ok(ip, now=None):
+    now = time.monotonic() if now is None else now
+    with _RLOCK:
+        if now - _LAST_PRUNE[0] > RATE_WIN:  # чистка старых окон — память не растёт
+            for k in [k for k, v in _HITS.items() if now - v[0] >= RATE_WIN]:
+                del _HITS[k]
+            _LAST_PRUNE[0] = now
+        v = _HITS.get(ip)
+        if v is None or now - v[0] >= RATE_WIN:
+            _HITS[ip] = [now, 1]
+            return True
+        v[1] += 1
+        return v[1] <= RATE_N
 
 def _init_db():
     try:
@@ -197,6 +221,7 @@ CONFS = load_confs()
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = IO_TIMEOUT  # медленные заголовки / простой keep-alive — соединение рвём
     server_version = ""  # без «BaseHTTP/x Python/x» — не светим стек
     sys_version = ""
     def log_message(self, *a):
@@ -217,6 +242,11 @@ class H(BaseHTTPRequestHandler):
         host = self._host()
         if host not in CONFS:  # чужой Host (сканер/чужая CF-зона на наш IP) — молча рвём
             self.close_connection = True
+            return
+        ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
+        if not rate_ok(ip):
+            self.close_connection = True
+            self._send(429, b"", {"Retry-After": str(int(RATE_WIN)), "Connection": "close"})
             return
         if path in ("healthz", "favicon.ico", ""):
             self._send(200, b"ok", {"Content-Type": "text/plain"})
@@ -252,11 +282,57 @@ def build_ctx():
     ctx.sni_callback = sni
     return ctx
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 512
+
+    def __init__(self, addr, handler, ctx):
+        self.ctx = ctx
+        self.slots = threading.BoundedSemaphore(MAX_CONN)
+        ThreadingHTTPServer.__init__(self, addr, handler)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):  # потолок соединений — новые сразу закрываем
+            self.shutdown_request(request)
+            return
+        try:
+            ThreadingHTTPServer.process_request(self, request, client_address)
+        except Exception:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            ThreadingHTTPServer.process_request_thread(self, request, client_address)
+        finally:
+            self.slots.release()
+
+    def finish_request(self, request, client_address):
+        # рукопожатие здесь (поток соединения, с таймаутом), а не в accept: иначе один
+        # молчащий клиент блокировал бы приём всех остальных
+        request.settimeout(IO_TIMEOUT)
+        try:
+            tls = self.ctx.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError):
+            return
+        try:
+            self.RequestHandlerClass(tls, client_address, self)
+        finally:
+            try:
+                tls.close()
+            except OSError:
+                pass
+
+    def handle_error(self, request, client_address):
+        e = sys.exc_info()[1]
+        if not isinstance(e, (socket.timeout, ConnectionError, ssl.SSLError)):
+            ThreadingHTTPServer.handle_error(self, request, client_address)
+
 def main():
     _init_db()
-    httpd = ThreadingHTTPServer(("0.0.0.0", PORT), H)
-    httpd.socket = build_ctx().wrap_socket(httpd.socket, server_side=True)
-    sys.stderr.write("shortcf listening on :%d (%d domains)\n" % (PORT, len(CONFS)))
+    httpd = Server(("0.0.0.0", PORT), H, build_ctx())
+    sys.stderr.write("shortcf listening on :%d (%d domains, max %d conn, %d req/%ds per ip)\n"
+                     % (PORT, len(CONFS), MAX_CONN, RATE_N, RATE_WIN))
     httpd.serve_forever()
 
 if __name__ == "__main__":
