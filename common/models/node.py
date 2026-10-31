@@ -15,11 +15,11 @@ class Node(SQLModel, table=True):
     password_enc: str
     port: int | None = None
     region: str | None = None  # гео AWS этой ноды (us-east-1 и т.п.); None = без региона
-    purpose: str = "send"      # роль: 'send' (отправка) | 'short' (сокращалка) | 'both'
+    purpose: str = "send"      # роль: 'send' (отправка) | 'short' (сокращалка) | 'both' | '' = не задана (новая, п.87)
     is_backup: bool = False    # резервная: берётся для отправки, только если основные не отвечают (п.59)
     is_active: bool = True
     error_count: int = 0
 
     def has_role(self, role: str) -> bool:
-        p = (self.purpose or "send")
-        return p == "both" or p == role
+        p = self.purpose
+        return bool(p) and (p == "both" or p == role)

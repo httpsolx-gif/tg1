@@ -28,8 +28,12 @@ def _mark(n: Node) -> str:
     return "🟠" if node_pool.is_down(n.id) else "🟢"
 
 
+_ROLE_TAG = {"short": " · short", "both": " · send+short", "": " · ⚠️ без роли"}  # send — без метки
+
+
 def _tags(n: Node) -> str:
-    return (f" · {n.region}" if n.region else "") + (" · 🛟 резерв" if n.is_backup else "")
+    return (_ROLE_TAG.get(n.purpose or "", "") + (f" · {n.region}" if n.region else "")
+            + (" · 🛟 резерв" if n.is_backup else ""))
 
 
 def kb_nodes_root() -> InlineKeyboardMarkup:
@@ -76,8 +80,8 @@ def _node_view(nid: int):
     since = node_pool.down_since(n.id) if n.is_active else None
     if since:
         mark = f"🟠 не отвечает с {time.strftime('%H:%M:%S', time.localtime(since))} — письма идут через другую ноду"
-    _ROLE_RU = {"send": "отправка", "short": "сокращалка", "both": "отправка+сокращалка"}
-    purpose = n.purpose or "send"
+    _ROLE_RU = {"send": "отправка", "short": "сокращалка", "both": "отправка+сокращалка", "": "не задана ⚠️"}
+    purpose = n.purpose or ""
     text = (
         f"🖥 <b>{n.login}@{n.ip}</b>\n\n"
         f"• Роль: <b>{_ROLE_RU.get(purpose, purpose)}</b>\n"
@@ -193,6 +197,9 @@ async def node_toggle(cq: CallbackQuery):
         if not n:
             await cq.answer("Нода не найдена", show_alert=True)
             return
+        if not n.is_active and not n.purpose:
+            await cq.answer("Сначала выберите роль (🎛 Роль)", show_alert=True)
+            return
         n.is_active = not n.is_active
         db.add(n)
         db.commit()
@@ -228,7 +235,7 @@ async def node_backup(cq: CallbackQuery):
     await cq.answer("Нода теперь резервная" if backup else "Нода теперь основная")
 
 
-_ROLE_CYCLE = {"send": "short", "short": "both", "both": "send"}
+_ROLE_CYCLE = {"": "send", "send": "short", "short": "both", "both": "send"}
 
 
 @router.callback_query(F.data.startswith("node:role:"))
@@ -242,7 +249,8 @@ async def node_role(cq: CallbackQuery):
         if not n:
             await cq.answer("Нода не найдена", show_alert=True)
             return
-        n.purpose = _ROLE_CYCLE.get(n.purpose or "send", "short")
+        # нода не включается сама: роль листается по кругу, первым тапом была бы «отправка»
+        n.purpose = _ROLE_CYCLE.get(n.purpose or "", "send")
         db.add(n)
         db.commit()
         new = n.purpose
@@ -465,8 +473,9 @@ def _insert_nodes(parsed: List[Tuple[str, str, str]], region: str | None) -> Tup
                 errors.append(f"{login}@{ip} -> дубликат")
                 err += 1
                 continue
+            # новая нода — выключена и без роли, пока роль не выбрана в карточке (п.87)
             db.add(Node(login=login, ip=ip, password_enc=encrypt_password(pw),
-                        region=region, is_active=True))
+                        region=region, purpose="", is_active=False))
             existing.add((login, ip))
             ok += 1
         db.commit()
