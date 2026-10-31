@@ -93,9 +93,10 @@ def ops_rows(scope_id: int) -> List[List[InlineKeyboardButton]]:
     # вели на те же экраны; принуд. смена — внутри «Автосмена»
     return [
         [_btn(f"🔁 Автосмена: {_auto_txt(cfg)}", f"sco:auto:{i}")],
-        [_btn("➕ SMTP", f"sco:up:{i}"), _btn("⚙️ SMTP", f"sco:accs:{i}")],
-        [_btn("🗑 SMTP", f"sco:clr:{i}"), _btn("📤 Выгрузка SMTP", f"sco:dl:{i}")],
-        [_btn("🔗 SHORT", f"sco:sh:{i}"), _btn("🗑 SHORT", f"sco:shdel:{i}")],
+        # слева SMTP, справа SHORT; удаление напротив удаления; выгрузка — в «Автосмене»
+        [_btn("➕ SMTP", f"sco:up:{i}"), _btn("🔗 SHORT", f"sco:sh:{i}")],
+        [_btn("⚙️ SMTP", f"sco:accs:{i}")],
+        [_btn("🗑 SMTP", f"sco:clr:{i}"), _btn("🗑 SHORT", f"sco:shdel:{i}")],
     ]
 
 
@@ -174,6 +175,7 @@ def _auto_view(sid: int):
         [_btn(f"📈 Лимит автосмены: {cfg.switch_limit or '—'}", f"sco:autolim:{sid}")],
         [_btn(f"🔄 По кругу: {'вкл 🟢' if cfg.wrap else 'выкл 🔴'}", f"sco:wraptog:{sid}")],
         [_btn("⏭ Принуд. смена", f"sco:forced:{sid}")],
+        [_btn("📤 Выгрузка SMTP", f"sco:dl:{sid}")],
         [_btn("⬅️ Назад", f"sco:card:{sid}")],
     ])
     return text, kb
