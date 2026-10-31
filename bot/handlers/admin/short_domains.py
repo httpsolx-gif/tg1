@@ -362,82 +362,143 @@ async def _create_domain(msg: Message, state: FSMContext, node_id: int, uid: int
                 db.add(cfg)
                 db.commit()
 
-    text, kb = _card(did)
+    note = None
+    if registrar:  # ключ регистратора есть — NS прописываем сразу, дальше фон доведёт до Work
+        err = await _autons(did)
+        note = f"🔴 <code>{_esc(err)}</code>" if err else "⏳ NS прописаны — дальше само, пришлю «work ✅»."
+    text, kb = _card(did, note)
     await wait.edit_text(text, reply_markup=kb)
 
 
 # ======================= авто-NS у регистратора (NameSilo) =======================
+async def _autons(did: int) -> str | None:
+    """Прописать NS CF у регистратора. → None (ок) | текст ошибки."""
+    with Session(_engine) as db:
+        d = db.get(ShortDomain, did)
+        reg_tok = _registrar_key(d)
+        reg = d.registrar or "namesilo"
+        zone, ns1, ns2 = (d.zone_name or d.domain), d.ns1, d.ns2
+    name = _REG_RU.get(reg, reg)
+    if not reg_tok:
+        return f"нет ключа {name} (OTHER → 🔑 Ключи)"
+    if reg == "dynadot":
+        from bot.services import dynadot as api
+    else:
+        from bot.services import namesilo as api
+    try:
+        await api.change_nameservers(reg_tok, zone, [ns1, ns2])
+    except Exception as e:
+        return f"{name}: {str(e)[:160]} — пропишите NS вручную"
+    return None
+
+
+async def _activate(did: int) -> tuple[str, str | None]:
+    """NS прописались? → SSL Full + Always HTTPS + ПРОКСИРОВАННАЯ A-запись + чистка записей с IP.
+    → ("active"|"pending"|"error", ошибка/статус зоны)."""
+    with Session(_engine) as db:
+        d = db.get(ShortDomain, did)
+        token = _cf_token(d)
+        zone_id, origin_ip, domain = d.cf_zone_id, d.origin_ip, d.domain
+    try:
+        await cf.activation_check(token, zone_id)
+        st = await cf.zone_status(token, zone_id)
+    except Exception as e:
+        return "pending", f"CF: {str(e)[:160]}"  # сеть/CF — попробуем позже
+    if st != "active":
+        return "pending", st
+    try:
+        await cf.set_ssl(token, zone_id, "full")
+        await cf.always_use_https(token, zone_id, True)
+        rid = await cf.upsert_a_record(token, zone_id, domain, origin_ip, proxied=True)
+        leaks = await cf.hide_origin_ip(token, zone_id, origin_ip)
+        if leaks:
+            log.warning("short %s: исправлены записи со светившимся IP: %s", domain, leaks)
+    except Exception as e:
+        with Session(_engine) as db:
+            d = db.get(ShortDomain, did)
+            d.status, d.last_error = "error", str(e)[:250]
+            db.add(d); db.commit()
+        return "error", str(e)[:160]
+    with Session(_engine) as db:
+        d = db.get(ShortDomain, did)
+        d.cf_record_id, d.status, d.last_error, d.activated_at = rid, "active", None, sc.now_iso()
+        db.add(d); db.commit()
+    return "active", None
+
+
+_busy: set[int] = set()  # домены, которые прямо сейчас поднимаются (кнопка или фон)
+
+
+async def _advance(did: int, bot) -> tuple[str, str | None]:
+    """Довести домен как можно дальше: NS → active → сервер → Work. Ошибка → уведомление админам.
+    → (состояние, пояснение)."""
+    if did in _busy:
+        return "busy", None
+    _busy.add(did)
+    try:
+        with Session(_engine) as db:
+            d = db.get(ShortDomain, did)
+            status, domain = (d.status, d.domain) if d else (None, "")
+        if status in ("zone", "pending_ns"):
+            state, info = await _activate(did)
+            if state == "error":
+                await _notify_admins(bot, f"🔴 Домен <b>{_esc(domain)}</b>: Cloudflare — <code>{_esc(info or '')}</code>")
+                return state, info
+            if state != "active":
+                return state, info
+            status = "active"
+        if status in ("active", "provisioning"):
+            ok, _logs, err = await _do_provision(did, bot)  # успех → «Домен X work ✅» (п.93)
+            if not ok:
+                await _notify_admins(bot, f"🔴 Домен <b>{_esc(domain)}</b>: сервер не настроен — <code>{_esc(err[:160])}</code>")
+                return "error", err
+            return "ready", None
+        return status or "missing", None
+    finally:
+        _busy.discard(did)
+
+
+async def short_autoloop(bot) -> None:
+    """Фон: домены в ожидании NS / с зоной active сами доходят до Work (раз в минуту)."""
+    import asyncio
+    while True:
+        await asyncio.sleep(60)
+        try:
+            with Session(_engine) as db:
+                ids = [d.id for d in db.exec(select(ShortDomain).where(
+                    ShortDomain.status.in_(("zone", "pending_ns", "active", "provisioning")))).all()]
+            for did in ids:
+                await _advance(did, bot)
+        except Exception as e:
+            log.warning("short autoloop: %s", e)
+
+
 @router.callback_query(F.data.startswith("sdom:autons:"))
 async def sdom_autons(cq: CallbackQuery):
     if not _admin(cq.from_user.id):
         await cq.answer("Нет доступа", show_alert=True)
         return
     did = int(cq.data.split(":")[2])
-    with Session(_engine) as db:
-        d = db.get(ShortDomain, did)
-        reg_tok = _registrar_key(d)
-        reg = d.registrar or "namesilo"
-        domain, ns1, ns2 = (d.zone_name or d.domain), d.ns1, d.ns2
-    name = _REG_RU.get(reg, reg)
-    if not reg_tok:
-        await cq.answer(f"Нет ключа {name} (OTHER → 🔑 Ключи)", show_alert=True)
-        return
-    await _show_card(cq, did, f"⏳ Меняю NS в {name}…")
-    if reg == "dynadot":
-        from bot.services import dynadot as api
-    else:
-        from bot.services import namesilo as api
-    try:
-        detail = await api.change_nameservers(reg_tok, domain, [ns1, ns2])
-    except Exception as e:
-        await _show_card(cq, did, f"🔴 {name}: <code>{_esc(str(e)[:160])}</code> — пропишите NS вручную")
-        return
-    await _show_card(cq, did, f"✅ NS отправлены в {name}. Через минуты-часы — «Проверить NS».")
+    await _show_card(cq, did, "⏳ Прописываю NS…")
+    err = await _autons(did)
+    await _show_card(cq, did, f"🔴 <code>{_esc(err)}</code>" if err else "⏳ NS прописаны — дальше само, пришлю «work ✅».")
 
 
-# ======================= проверка NS / активация (фаза A финал) =======================
+# ======================= проверка NS / активация → сразу сервер =======================
 @router.callback_query(F.data.startswith("sdom:checkns:"))
 async def sdom_checkns(cq: CallbackQuery):
     if not _admin(cq.from_user.id):
         await cq.answer("Нет доступа", show_alert=True)
         return
     did = int(cq.data.split(":")[2])
-    with Session(_engine) as db:
-        d = db.get(ShortDomain, did)
-        token = _cf_token(d)
-        zone_id, origin_ip, domain = d.cf_zone_id, d.origin_ip, d.domain
-    await _show_card(cq, did, "⏳ Проверяю NS…")
-    try:
-        await cf.activation_check(token, zone_id)
-        st = await cf.zone_status(token, zone_id)
-    except Exception as e:
-        await _show_card(cq, did, f"🔴 CF: <code>{_esc(str(e)[:160])}</code>")
-        return
-    if st != "active":
-        await _show_card(cq, did, f"⏳ NS ещё не прописались ({_esc(st)}) — проверьте позже.")
-        return
-    # active → SSL Full + Always HTTPS + ПРОКСИРОВАННАЯ A-запись (оранжевое облако)
-    try:
-        await cf.set_ssl(token, zone_id, "full")
-        await cf.always_use_https(token, zone_id, True)
-        rid = await cf.upsert_a_record(token, zone_id, domain, origin_ip, proxied=True)
-        leaks = await cf.hide_origin_ip(token, zone_id, origin_ip)
-    except Exception as e:
-        with Session(_engine) as db:
-            d = db.get(ShortDomain, did)
-            d.status, d.last_error = "error", str(e)[:250]
-            db.add(d); db.commit()
-        await _show_card(cq, did)
-        return
-    with Session(_engine) as db:
-        d = db.get(ShortDomain, did)
-        d.cf_record_id = rid
-        d.status = "active"
-        d.last_error = None
-        d.activated_at = sc.now_iso()
-        db.add(d); db.commit()
-    leak_note = ("\n⚠️ Записи со светившимся IP исправлены: " + _esc(", ".join(leaks))) if leaks else ""
-    await _show_card(cq, did, "✅ NS на месте — жмите «Настроить сервер»." + leak_note)
+    await _show_card(cq, did, "⏳ Проверяю…")
+    state, info = await _advance(did, cq.bot)
+    note = {
+        "ready": None,
+        "busy": "⏳ Уже поднимается — пришлю «work ✅».",
+        "pending": f"⏳ NS ещё не прописались ({_esc(info or '')}) — проверяю сам раз в минуту.",
+    }.get(state, f"🔴 <code>{_esc(info or state)}</code>")
+    await _show_card(cq, did, note)
 
 
 # ======================= провижн origin (фаза B) =======================
@@ -490,8 +551,15 @@ async def sdom_provision(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     did = int(cq.data.split(":")[2])
+    if did in _busy:
+        await _show_card(cq, did, "⏳ Уже поднимается — пришлю «work ✅».")
+        return
     await _show_card(cq, did, "⏳ Настраиваю сервер…")
-    ok, logs, err = await _do_provision(did, cq.bot)
+    _busy.add(did)
+    try:
+        ok, logs, err = await _do_provision(did, cq.bot)
+    finally:
+        _busy.discard(did)
     await _show_card(cq, did, None if ok else f"🔴 <code>{_esc(err[:160])}</code>")
 
 

@@ -148,6 +148,13 @@ async def main():
     except Exception as e:
         logging.getLogger("bot").warning("spamcheck loop not started: %s", e)
 
+    # Short-домены сами доходят до Work: NS → active → сервер → уведомление (п.96)
+    try:
+        from bot.handlers.admin.short_domains import short_autoloop
+        asyncio.create_task(short_autoloop(bot))
+    except Exception as e:
+        logging.getLogger("bot").warning("short autoloop not started: %s", e)
+
     logging.getLogger("bot").info("🚀 Bot started")
     await dp.start_polling(bot)
 
