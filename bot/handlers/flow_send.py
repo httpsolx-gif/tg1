@@ -67,8 +67,16 @@ def _kb_services(country: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _kb_result() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✉️ Новое письмо", callback_data="send:new")]])
+# последняя отправка на юзера — для «Переотправить» (пересобирается заново: учтёт SMTP/сокру/шаблон)
+_LAST: dict[int, dict] = {}
+
+
+def _kb_result(resend: bool = False) -> InlineKeyboardMarkup:
+    rows = []
+    if resend:
+        rows.append([InlineKeyboardButton(text="🔁 Переотправить", callback_data="send:resend")])
+    rows.append([InlineKeyboardButton(text="✉️ Новое письмо", callback_data="send:new")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ---------- entry ----------
@@ -83,6 +91,31 @@ async def start_send(m: Message, state: FSMContext):
     await state.clear()
     await state.set_state(SendFlow.country)
     await m.answer("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
+
+
+@router.callback_query(F.data == "send:resend")
+async def send_resend(cq: CallbackQuery):
+    from bot.services.access import remember_user
+    remember_user(cq.from_user.id, cq.from_user.username)
+    if _sender_class(cq.from_user) == "ban":
+        await cq.answer("🚫 Доступ к отправке заблокирован.", show_alert=True)
+        return
+    last = _LAST.get(cq.from_user.id)
+    if not last:
+        await cq.answer("Нет данных прошлой отправки", show_alert=True)
+        return
+    await cq.answer("Переотправляю…")
+    # пересобираем payload заново — подхватит текущие рубрику/шаблон/сокру/аккаунт
+    from bot.services.send_core import build_payload, SendError
+    try:
+        payload = build_payload(country=last["country"], service=last["service"],
+                                email=last["email"], link=last["link"],
+                                sender_class=last["sender_class"])
+    except SendError as e:
+        await cq.message.answer(str(e))
+        return
+    await cq.message.answer("⏳ Переотправляю…")
+    await _do_send(cq.message, payload, user_id=cq.from_user.id)
 
 
 @router.callback_query(F.data == "send:new")
@@ -221,6 +254,8 @@ async def take_email(m: Message, state: FSMContext):
         f"• Отправитель: {_esc(str(pv['sender_disp']))}\n\n"
         "⏳ Отправляю…"
     )
+    _LAST[m.from_user.id] = {"country": data.get("country"), "service": data["service"],
+                             "email": email, "link": data["link"], "sender_class": cls}
     await _do_send(m, payload, user_id=m.from_user.id)
 
 
@@ -251,4 +286,4 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
         lines.append(f"Через: {_esc(via or '—')}")
         if info:
             lines.append(f"\n<code>{_esc(str(info)[:800])}</code>")
-    await target.answer("\n".join(lines), reply_markup=_kb_result())
+    await target.answer("\n".join(lines), reply_markup=_kb_result(resend=user_id in _LAST))
