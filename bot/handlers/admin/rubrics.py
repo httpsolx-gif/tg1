@@ -512,7 +512,7 @@ def _kb_countries() -> InlineKeyboardMarkup:
     # число сервисов рядом со страной: пустые (0) в отправке скрыты
     btns = [InlineKeyboardButton(text=f"{c.flag} {c.code} · {len(cs.get(c.code, []))}", callback_data=f"svc:c:{c.code}")
             for c in catalog.countries()]
-    rows = [[InlineKeyboardButton(text="🌐 ALL (все страны)", callback_data="sco:o:*:*:0")]]
+    rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data="sco:o:*:*:0")]]
     rows += [btns[i:i + 3] for i in range(0, len(btns), 3)]
     rows.append([InlineKeyboardButton(text="➕ Добавить страну", callback_data="svc:cadd")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="srv:root")])
@@ -552,9 +552,9 @@ async def svc_country(cq: CallbackQuery):
 
 def _country_view(code: str):
     svcs = catalog.services(code)
-    rows = [[InlineKeyboardButton(text=f"🌐 ALL (все сервисы {code})", callback_data=f"sco:o:{code}:*:0")]]
+    rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data=f"sco:o:{code}:*:0")]]
     rows += [[InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"svc:s:{code}:{s}")] for s in svcs]
-    rows.append([InlineKeyboardButton(text="➕ Добавить сервисы", callback_data=f"svc:sadd:{code}")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data=f"svc:sadd:{code}")])
     rows.append([InlineKeyboardButton(text="🗑 Удалить страну", callback_data=f"svc:cdel:{code}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="svc:root")])
     hint = "" if svcs else "\n<i>Сервисов нет — в отправке страна скрыта.</i>"
@@ -569,7 +569,7 @@ async def svc_service(cq: CallbackQuery):
     _, _, code, service = cq.data.split(":", 3)
     with Session(_engine) as db:
         rubrics = db.exec(select(Rubric).order_by(Rubric.id)).all()
-    rows = [[InlineKeyboardButton(text="🌐 ALL (все рубрики)", callback_data=f"sco:o:{code}:{service}:0")]]
+    rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data=f"sco:o:{code}:{service}:0")]]
     rows += [[InlineKeyboardButton(text=f"🗂 {r.name}", callback_data=f"svc:r:{code}:{service}:{r.id}")] for r in rubrics]
     rows.append([InlineKeyboardButton(text="🗑 Удалить сервис", callback_data=f"svc:sdel:{code}:{service}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:c:{code}")])
