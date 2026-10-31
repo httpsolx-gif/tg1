@@ -159,8 +159,8 @@ async def main():
 
     # Уникализация шаблонов по расписанию (htmlmix, п.107)
     try:
-        from bot.services.uniq import schedule_loop as uniq_schedule_loop
-        asyncio.create_task(uniq_schedule_loop(bot))
+        from bot.services.uniq import maintain_loop as uniq_maintain_loop
+        asyncio.create_task(uniq_maintain_loop(bot))
     except Exception as e:
         logging.getLogger("bot").warning("uniq schedule loop not started: %s", e)
 

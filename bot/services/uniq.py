@@ -210,102 +210,194 @@ def _effective_row(db: Session, service: str, rubric_id: int | None, mailbox: st
     return None
 
 
+def _code_for(rid: int | None) -> str:
+    if not rid:
+        return ""
+    from common.models.rubric import Rubric
+    with Session(_engine) as db:
+        r = db.get(Rubric, rid)
+    return (r.name[:1] or "").lower() if r else ""
+
+
 def _row_source(service: str, rid: int | None, mailbox: str) -> str:
     """Исходный шаблон строки — ровно тот, что ушёл бы при отправке этой связки."""
     from bot.services.send_core import resolve_send_template
-    from common.models.rubric import Rubric
-    code = ""
-    if rid:
-        with Session(_engine) as db:
-            r = db.get(Rubric, rid)
-        code = (r.name[:1] or "").lower() if r else ""
-    return resolve_send_template(service, code, rid, mailbox)
+    return resolve_send_template(service, _code_for(rid), rid, mailbox)
+
+
+def _rubric_has_own_template(service: str, rid: int, code: str) -> bool:
+    from bot.services.templates import resolve_template_html
+    with Session(_engine) as db:
+        row = _cfg_row(db, service, rid, "")
+    return bool(row and row.template_html) or resolve_template_html(service, code) is not None
 
 
 def active_variant(service: str, rubric_id: int | None, mailbox: str, send_html: str, cfg: dict) -> str | None:
-    """Готовый вариант для отправки: только если он есть и отвечает текущему шаблону+опциям."""
+    """Готовый вариант для отправки: сначала строка конкретной рубрики, потом ALL (fallback).
+    Отдаём только если sig совпал с текущим шаблоном+опциями — иначе None (письмо на исходном)."""
     if not cfg.get("on") or not enabled_count(cfg):
         return None
+    want = _sig(send_html, cfg)
     with Session(_engine) as db:
-        row = _effective_row(db, service, rubric_id, mailbox)
-        if not row or not row.uniq_html:
-            return None
-        return row.uniq_html if row.uniq_sig == _sig(send_html, cfg) else None
+        for store_rid in (rubric_id, None):
+            row = _cfg_row(db, service, int(store_rid) if store_rid else None, "")
+            if row and row.uniq_html and row.uniq_sig == want:
+                return row.uniq_html
+    return None
 
 
-async def generate(service: str, rid: int | None, mailbox: str, *, slot: str | None = None) -> tuple[str, str]:
-    """Сгенерировать и записать активный вариант для строки конфига.
-    → ('ok'|'wait'|'nosrc'|'apierr'|'norow'|'off', инфо). slot — пометка слота расписания.
-    """
+async def _gen_core(service: str, store_rid: int | None, source: str, cfg: dict,
+                    *, slot: str | None = None) -> tuple[str, str]:
+    """Сгенерировать вариант из `source` и записать в строку (service, store_rid, '')."""
+    if not source:
+        return "nosrc", "нет исходного шаблона"
     async with _lock:
-        with Session(_engine) as db:
-            row = _cfg_row(db, service, int(rid) if rid else None, mailbox)
-            if not row:
-                return "norow", "нет строки конфига"
-            cfg = parse_cfg(row.uniq_opts)
-        if not cfg["on"] or not enabled_count(cfg):
-            return "off", "уникализация выключена"
-        left = cooldown_left()
-        if left > 0:
-            return "wait", str(left)
-        source = _row_source(service, rid, mailbox)
-        if not source:
-            return "nosrc", "нет исходного шаблона"
+        if cooldown_left() > 0:
+            return "wait", str(cooldown_left())
         _set_ts(time.time())
         variant = await _fetch_one(source, cfg)
-        if not variant:
-            return "apierr", "htmlmix не вернул вариант"
-        with Session(_engine) as db:
-            row = _cfg_row(db, service, int(rid) if rid else None, mailbox)
-            if not row:
-                return "norow", "строка исчезла"
-            row.uniq_html = variant
-            row.uniq_sig = _sig(source, cfg)
-            row.uniq_at = datetime.utcnow().isoformat(timespec="seconds")
-            if slot:
-                row.uniq_slot = slot
-            db.add(row)
-            db.commit()
+    if not variant:
+        return "apierr", "htmlmix не вернул вариант"
+    with Session(_engine) as db:
+        row = _cfg_row(db, service, int(store_rid) if store_rid else None, "")
+        if not row:
+            row = ServiceRubricConfig(service=service, rubric_id=(int(store_rid) if store_rid else None), mailbox="")
+        row.uniq_html = variant
+        row.uniq_sig = _sig(source, cfg)
+        row.uniq_at = datetime.utcnow().isoformat(timespec="seconds")
+        if slot:
+            row.uniq_slot = slot
+        db.add(row)
+        db.commit()
     return "ok", "вариант обновлён"
 
 
-def status_line(service: str, rid: int | None, mailbox: str, cfg: dict) -> str:
-    """Короткий статус текущего варианта для экрана настроек."""
+async def generate(service: str, rid: int | None, mailbox: str) -> tuple[str, str]:
+    """Ручная генерация. Рубрика — сразу её вариант. ALL — сбросить варианты рубрик (их
+    дольёт фон) и обновить общий вариант. → ('ok'|'okall'|'off'|'wait'|'nosrc'|'apierr', инфо)."""
     with Session(_engine) as db:
         row = _cfg_row(db, service, int(rid) if rid else None, mailbox)
-    if not row or not row.uniq_html:
-        return "ещё не сгенерирован"
-    when = (row.uniq_at or "").replace("T", " ")
-    try:
-        fresh = row.uniq_sig == _sig(_row_source(service, rid, mailbox), cfg)
-    except Exception:
-        fresh = True
-    tail = "" if fresh else " ⚠️ настройки/шаблон изменились — пересоздайте"
-    return f"есть, от {when} UTC{tail}"
+        cfg = parse_cfg(row.uniq_opts) if row else default_cfg()
+    if not cfg["on"] or not enabled_count(cfg):
+        return "off", "уникализация выключена"
+    if rid:
+        return await _gen_core(service, int(rid), _row_source(service, int(rid), ""), cfg)
+    # ALL: пометить рубрики со своим шаблоном на долив (фон сделает по одной)
+    from common.models.rubric import Rubric
+    names: list[str] = []
+    with Session(_engine) as db:
+        own_cfg = {r.rubric_id for r in db.exec(select(ServiceRubricConfig).where(
+            (ServiceRubricConfig.service == service) & (ServiceRubricConfig.rubric_id != None)  # noqa: E711
+        )).all() if parse_cfg(r.uniq_opts)["on"]}
+        for rb in db.exec(select(Rubric)).all():
+            if rb.id in own_cfg:
+                continue
+            if _rubric_has_own_template(service, rb.id, (rb.name[:1] or "").lower()):
+                r2 = _cfg_row(db, service, rb.id, "")
+                if not r2:
+                    r2 = ServiceRubricConfig(service=service, rubric_id=rb.id, mailbox="")
+                r2.uniq_html = None
+                r2.uniq_sig = None
+                db.add(r2)
+                names.append(rb.name)
+        db.commit()
+    st, info = await _gen_core(service, None, _row_source(service, None, ""), cfg)
+    if names:
+        return "okall", ", ".join(names)
+    return st, info
 
 
-# ───────────────────── расписание (фон у лидера) ─────────────────────
-async def schedule_loop(bot=None) -> None:
-    """Раз в минуту обновляет варианты у связок с режимом «по расписанию»."""
+def status_line(service: str, rid: int | None, mailbox: str, cfg: dict) -> str:
+    """Статус готовности варианта(ов) для экрана настроек."""
+    def _fresh(store_rid, src=None):
+        with Session(_engine) as db:
+            row = _cfg_row(db, service, int(store_rid) if store_rid else None, "")
+        if not row or not row.uniq_html:
+            return None, None
+        try:
+            ok = row.uniq_sig == _sig(src if src is not None else _row_source(service, store_rid, ""), cfg)
+        except Exception:
+            ok = True
+        return row, ok
+    if rid:
+        row, ok = _fresh(int(rid))
+        if not row:
+            return "ещё не сгенерирован"
+        when = (row.uniq_at or "").replace("T", " ")
+        tail = "" if ok else " ⚠️ настройки/шаблон изменились — пересоздайте"
+        return f"есть, от {when} UTC{tail}"
+    # ALL: по рубрикам со своим шаблоном + «прочие» (общий вариант)
+    from common.models.rubric import Rubric
+    parts: list[str] = []
+    with Session(_engine) as db:
+        rubs = [(r.id, r.name) for r in db.exec(select(Rubric)).all()]
+    for rb_id, name in rubs:
+        code = (name[:1] or "").lower()
+        if not _rubric_has_own_template(service, rb_id, code):
+            continue
+        _row, ok = _fresh(rb_id)
+        parts.append(f"{name} {'✅' if ok else '⏳'}")
+    _rowA, okA = _fresh(None)
+    parts.append(f"прочие {'✅' if okA else '⏳'}")
+    return "по рубрикам — " + ", ".join(parts)
+
+
+# ───────────────────── фон: держим варианты свежими (у лидера) ─────────────────────
+def _targets() -> list[tuple[str, int | None, dict]]:
+    """Что поддерживать: (service, store_rid, cfg). Рубрики со своим конфигом + разворот ALL."""
+    out: list[tuple[str, int | None, dict]] = []
+    from common.models.rubric import Rubric
+    with Session(_engine) as db:
+        rows = db.exec(select(ServiceRubricConfig).where(
+            ServiceRubricConfig.uniq_opts != None)).all()  # noqa: E711
+        rubric_on: dict[tuple[str, int], dict] = {}
+        all_on: dict[str, dict] = {}
+        for r in rows:
+            c = parse_cfg(r.uniq_opts)
+            if not c["on"] or not enabled_count(c):
+                continue
+            if r.rubric_id:
+                rubric_on[(r.service, r.rubric_id)] = c
+            else:
+                all_on[r.service] = c
+        rubs = [(r.id, r.name) for r in db.exec(select(Rubric)).all()]
+    for (service, rid), c in rubric_on.items():
+        out.append((service, rid, c))
+    for service, c in all_on.items():
+        for rb_id, name in rubs:
+            if (service, rb_id) in rubric_on:
+                continue
+            if _rubric_has_own_template(service, rb_id, (name[:1] or "").lower()):
+                out.append((service, rb_id, c))
+        out.append((service, None, c))  # общий вариант (рубрики без своего шаблона)
+    return out
+
+
+async def maintain_loop(bot=None) -> None:
+    """Раз в минуту доливает недостающие/устаревшие варианты (вкл. разворот ALL по рубрикам)
+    и обновляет по расписанию. Один вызов API за тик (лимит 1/60 с)."""
     while True:
         await asyncio.sleep(60)
         try:
             now = datetime.now()
             hhmm = now.strftime("%H:%M")
             slot = now.strftime("%Y-%m-%d ") + hhmm
-            with Session(_engine) as db:
-                rows = db.exec(select(ServiceRubricConfig).where(
-                    ServiceRubricConfig.uniq_opts != None)).all()  # noqa: E711
-                due = []
-                for r in rows:
-                    c = parse_cfg(r.uniq_opts)
-                    if c["on"] and c["mode"] == "schedule" and hhmm in c["times"] and r.uniq_slot != slot:
-                        due.append((r.service, r.rubric_id, r.mailbox))
-            for service, rid, mailbox in due:
-                st, info = await generate(service, rid, mailbox, slot=slot)
+            for service, store_rid, cfg in _targets():
+                source = _row_source(service, store_rid, "")
+                want = _sig(source, cfg)
+                with Session(_engine) as db:
+                    row = _cfg_row(db, service, int(store_rid) if store_rid else None, "")
+                stale = (not row) or (not row.uniq_html) or (row.uniq_sig != want)
+                sched_due = (cfg["mode"] == "schedule" and hhmm in cfg["times"]
+                             and (not row or row.uniq_slot != slot))
+                if not (stale or sched_due):
+                    continue
+                st, info = await _gen_core(service, store_rid, source, cfg,
+                                           slot=slot if sched_due else None)
                 if st == "wait":
-                    break  # кулдаун — остальные догонят на следующих минутах (slot не помечен)
-                if st not in ("ok", "off"):
-                    log.warning("uniq schedule %s/%s: %s %s", service, rid, st, info)
+                    break  # кулдаун — догоним на следующих тиках
+                if st != "ok":
+                    log.warning("uniq maintain %s/%s: %s %s", service, store_rid, st, info)
+                break  # один за тик (кулдаун API)
         except Exception as e:
-            log.warning("uniq schedule loop: %s", e)
+            log.warning("uniq maintain loop: %s", e)

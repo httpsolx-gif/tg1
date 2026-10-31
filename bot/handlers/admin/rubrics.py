@@ -817,8 +817,9 @@ def _uniq_view(code: str, service: str, rid: int, mailbox: str):
     if not int(rid):
         own = _rubrics_with_own_template(service)
         if own:
-            warn = ("⚠️ <b>У рубрик свои шаблоны</b> (" + ", ".join(_esc(n) for n in own) +
-                    "). На «ALL» уникализация к ним НЕ применится — включите её на самой рубрике.\n\n")
+            warn = ("ℹ️ У рубрик свои шаблоны (" + ", ".join(_esc(n) for n in own) +
+                    "). На «ALL» уникализация применится к каждой по её шаблону — варианты "
+                    "готовятся фоном (по одной рубрике в минуту, лимит API).\n\n")
     sched = cfg.get("mode") == "schedule"
     mode_txt = ("по расписанию: " + ", ".join(cfg.get("times") or [])) if sched else "вручную (кнопкой)"
     status = uniq.status_line(service, int(rid) or None, mailbox, cfg)
@@ -978,6 +979,7 @@ async def uniq_gen(cq: CallbackQuery):
     st, info = await uniq.generate(service, int(rid) or None, mailbox)
     note = {
         "ok": "✅ Вариант сгенерирован.",
+        "okall": f"✅ Запущено. Рубрики ({info}) обновятся фоном в течение ~минуты на рубрику (лимит API).",
         "off": "⚠️ Сначала включите уникализацию и отметьте опции.",
         "wait": f"⏳ Лимит htmlmix: подождите {info} с и повторите.",
         "nosrc": "🔴 Нет исходного шаблона для этой связки.",
