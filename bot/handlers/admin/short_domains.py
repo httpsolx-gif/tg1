@@ -88,6 +88,10 @@ _STATUS_RU = {
 }
 
 
+def _short_status(status: str) -> str:
+    return "Work" if status == "ready" else "Pending"
+
+
 # ======================= карточка домена =======================
 def _card(did: int):
     with Session(_engine) as db:
@@ -95,25 +99,22 @@ def _card(did: int):
         node = db.get(Node, d.node_id) if d and d.node_id else None
     if not d:
         return None, None
-    lines = [
-        f"🌐 <b>{_esc(d.domain)}</b>",
-        f"• Зона: <code>{_esc(d.zone_name)}</code>",
-        f"• Статус: <b>{_STATUS_RU.get(d.status, d.status)}</b>",
-    ]
+    # коротко (п.92): домен · Pending/Work, нода, NS (пока не готов), ошибка — если есть
+    lines = [f"🌐 <b>{_esc(d.domain)}</b> · <b>{_short_status(d.status)}</b>"]
     if node:
-        lines.append(f"• Origin-нода: <code>{_esc(node.login)}@{_esc(node.ip)}</code>")
-    if d.ns1 or d.ns2:
-        lines.append(f"• NS CF (пропишите у регистратора):\n   <code>{_esc(d.ns1 or '')}</code>\n   <code>{_esc(d.ns2 or '')}</code>")
-    if d.last_error:
-        lines.append(f"• Последняя ошибка: <code>{_esc(d.last_error[:200])}</code>")
+        lines.append(f"• Origin-нода: <code>{_esc(node.ip)}</code>")
+    if d.status != "ready" and (d.ns1 or d.ns2):
+        lines.append(f"\n   <code>{_esc(d.ns1 or '')}</code>\n   <code>{_esc(d.ns2 or '')}</code>")
+    if d.last_error and d.status != "ready":
+        lines.append(f"\n⚠️ <code>{_esc(d.last_error[:160])}</code>")
 
     rows = []
     if d.status in ("zone", "pending_ns"):
         if d.registrar and _registrar_key(d):
             rows.append([_btn(f"⚡ Авто-NS ({_REG_RU.get(d.registrar, d.registrar)})", f"sdom:autons:{did}")])
-        rows.append([_btn("🔄 Проверить NS / активацию", f"sdom:checkns:{did}")])
+        rows.append([_btn("🔄 Проверить NS", f"sdom:checkns:{did}")])
     if d.status in ("active", "error", "provisioning"):
-        rows.append([_btn("⚙️ Настроить сервер (origin)", f"sdom:provision:{did}")])
+        rows.append([_btn("⚙️ Настроить сервер", f"sdom:provision:{did}")])
     if d.status == "ready":
         rows.append([_btn("🧪 Тест редиректа", f"sdom:test:{did}"),
                      _btn("📊 Статистика", f"sdom:stats:{did}")])
@@ -122,8 +123,8 @@ def _card(did: int):
         if d.status == "ready":
             extra.append(_btn("♻️ Переразвернуть", f"sdom:provision:{did}"))
         rows.append(extra)
-    rows.append([_btn("🔁 Статус/обновить", f"sdom:open:{did}"), _btn("🗑 Удалить", f"sdom:del:{did}")])
-    rows.append([_btn("⬅️ К списку доменов", "sdom:list")])
+    rows.append([_btn("🔁 Обновить", f"sdom:open:{did}"), _btn("🗑 Удалить", f"sdom:del:{did}")])
+    rows.append([_btn("⬅️ Назад", "sdom:list")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -150,7 +151,7 @@ def _list_kb(uid: int = 0) -> InlineKeyboardMarkup:
     rows = []
     for d in doms:
         mark = "✅" if d.status == "ready" else ("⚠️" if d.status == "error" else "⏳")
-        rows.append([_btn(f"{mark} {d.domain} — {_STATUS_RU.get(d.status, d.status)}", f"sdom:open:{d.id}")])
+        rows.append([_btn(f"{mark} {d.domain} · {_short_status(d.status)}", f"sdom:open:{d.id}")])
     sid = _ret_scope.get(uid, 0)
     rows.append([_btn("➕ Добавить свой домен", "sdom:add:0")])
     rows.append([_btn("⬅️ Назад", f"sco:card:{sid}" if sid else "sdom:back")])
@@ -229,7 +230,7 @@ async def sdom_in_domain(m: Message, state: FSMContext):
         return
     await state.update_data(domain=dom, zone_name=_apex(dom))
     if keys.get("cf"):  # токен уже задан в OTHER → 🔑 Ключи — сразу к ноде
-        await _ask_node(m, state, f"Зона CF будет: <code>{_esc(_apex(dom))}</code>\n\n")
+        await _ask_node(m, state)
         return
     await state.set_state(ShortDomainAdd.token)
     await m.answer(
@@ -245,9 +246,7 @@ async def _ask_node(m: Message, state: FSMContext, head: str = "") -> None:
         nodes = db.exec(select(Node).where(Node.is_active == True)).all()  # noqa: E712
     short_nodes = [n for n in nodes if n.has_role("short")]
     if len(short_nodes) == 1:  # единственная short-нода — выбираем сами, без вопроса
-        n = short_nodes[0]
-        await m.answer(head + f"🖥 Origin-нода: <code>{_esc(n.login)}@{_esc(n.ip)}</code> (единственная с ролью short)")
-        await _create_domain(m, state, n.id, m.from_user.id)
+        await _create_domain(m, state, short_nodes[0].id, m.from_user.id)
         return
     await state.set_state(ShortDomainAdd.node)
     note, kb = _nodes_kb()
@@ -315,8 +314,7 @@ async def _create_domain(msg: Message, state: FSMContext, node_id: int, uid: int
     with Session(_engine) as db:
         shared = db.exec(select(ShortDomain).where(ShortDomain.zone_name == zone,
                                                    ShortDomain.domain != domain)).first()
-    wait = await msg.answer(f"⏳ Создаю зону <code>{_esc(zone)}</code> в Cloudflare…"
-                            + ("" if shared else "\n<i>Если зона уже есть — удалю и создам заново.</i>"))
+    wait = await msg.answer(f"⏳ {_esc(domain)}…")
     try:
         zone_id, ns = await cf.create_zone(token, zone, recreate=not shared)
     except Exception as e:
@@ -344,7 +342,7 @@ async def _create_domain(msg: Message, state: FSMContext, node_id: int, uid: int
         db.add(d)
         db.commit()
         db.refresh(d)
-        did, ns1, ns2 = d.id, d.ns1, d.ns2  # до commit ниже: после него объект истекает
+        did = d.id
         # привязка к области, из которой пришли (ссылки не укоротятся, пока статус != ready)
         if bind_sid:
             cfg = db.get(ScopeCfg, bind_sid)
@@ -353,16 +351,8 @@ async def _create_domain(msg: Message, state: FSMContext, node_id: int, uid: int
                 db.add(cfg)
                 db.commit()
 
-    bind_note = "\n\n🔗 Домен уже выбран как SHORT для области (заработает после готовности)." if bind_sid else ""
-    ns_note = (f"Нажмите «⚡ Авто-NS ({_REG_RU[registrar]})» ниже — пропишу сам."
-               if registrar else "Ключа регистратора нет (OTHER → 🔑 Ключи) — смените NS у регистратора вручную.")
-    await wait.edit_text(
-        "✅ Зона создана. Нужно прописать домену NS Cloudflare:\n"
-        f"   <code>{_esc(ns1 or '')}</code>\n   <code>{_esc(ns2 or '')}</code>\n\n"
-        + ns_note + " Как пропишется (минуты–часы) — жмите «Проверить NS»." + bind_note,
-    )
     text, kb = _card(did)
-    await msg.answer(text, reply_markup=kb)
+    await wait.edit_text(text, reply_markup=kb)
 
 
 # ======================= авто-NS у регистратора (NameSilo) =======================
