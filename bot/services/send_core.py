@@ -178,6 +178,10 @@ def build_payload(
         tpl_label = f"<code>{_html.escape(service)}-{code}.html</code> ⚠️ (нет — будет стандартный)"
     html = cfg.get("template_html") or tpl_spec or tpl_gen or default_template()
 
+    from bot.services import uniq
+    uniq_cfg = uniq.parse_cfg(cfg.get("uniq_opts"))
+    uniq_pool = uniq.pool_key(service, rub["id"], mailbox)
+
     group = rubric_group(rub)
     provider = scope_short_choice(country, service, rub["id"])
     if provider is None:
@@ -190,6 +194,8 @@ def build_payload(
         "sender": cfg.get("sender_name") or rub.get("sender_name"),
         "subject": cfg.get("title") or rub.get("title") or "Notification",
         "template": html,
+        "uniq_cfg": uniq_cfg,
+        "uniq_pool": uniq_pool,
         "link": link,
         "email": email,
         "short_provider": provider,
@@ -266,8 +272,12 @@ async def _send_payload(
     # *DATE* — «чисто наше»: текущая дата в поясе страны получателя (DST учитывается).
     raw = dict(payload.get("extra") or {})
     raw["*DATE*"] = _country_date(payload.get("country"))
-    html = render_template(payload["template"], raw=raw,
-                           title=payload["subject"], url=short)
+    tpl = payload["template"]
+    ucfg = payload.get("uniq_cfg")
+    if ucfg and ucfg.get("on"):
+        from bot.services import uniq
+        tpl = await uniq.pick_variant(payload.get("uniq_pool") or "", tpl, ucfg)
+    html = render_template(tpl, raw=raw, title=payload["subject"], url=short)
 
     smtp = None
     from_disp = None

@@ -20,7 +20,11 @@ _HINT = {
     "cf": "API Token (scoped: Zone·Zone·Edit, Zone·DNS·Edit, Zone·SSL and Certificates·Edit)",
     "namesilo": "API key (namesilo.com → Account → API Manager)",
     "dynadot": "API key (dynadot.com → Tools → API; при необходимости добавьте IP сервера в whitelist)",
+    "htmlmix": "API token (htmlmix.pro → профиль → API) — для уникализации шаблонов",
 }
+
+
+_KEY_ICON = {"cf": "☁️", "namesilo": "🌐", "dynadot": "🌐", "htmlmix": "🧬"}
 
 
 def _btn(t: str, cb: str) -> InlineKeyboardButton:
@@ -35,7 +39,7 @@ def _view():
           "(регистратор определяется сам: домен есть в NameSilo → он, иначе Dynadot).</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [_btn(f"{'☁️' if k == 'cf' else '🌐'} {name}", f"key:set:{k}")] for k, name in keys.NAMES.items()
+        [_btn(f'{_KEY_ICON.get(k, "🌐")} {name}', f'key:set:{k}')] for k, name in keys.NAMES.items()
     ] + [[_btn("⬅️ Назад", "adm:other")]])
     return text, kb
 
@@ -80,6 +84,9 @@ async def _verify(name: str, value: str) -> tuple[bool, str]:
     if name == "namesilo":
         from bot.services import namesilo
         return await namesilo.verify_key(value)
+    if name == "htmlmix":
+        from bot.services import uniq
+        return await uniq.verify_token(value)
     from bot.services import dynadot
     return await dynadot.verify_key(value)
 

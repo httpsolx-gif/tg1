@@ -20,3 +20,4 @@ class ServiceRubricConfig(SQLModel, table=True):
     title: str | None = None
     template_html: str | None = None  # переопределение шаблона (иначе — по рубрике)
     template_name: str | None = None  # имя файла, из которого поставлен шаблон (п.65, для карточки)
+    uniq_opts: str | None = None  # JSON настроек уникализации htmlmix (п.106); None = выкл/дефолт

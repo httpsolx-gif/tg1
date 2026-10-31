@@ -465,7 +465,7 @@ async def srv_root(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-_CFG_FIELDS = ("sender_name", "title", "template_html")
+_CFG_FIELDS = ("sender_name", "title", "template_html", "uniq_opts")
 
 
 def _cfg_row(db: Session, service: str, rid: int | None, mailbox: str):
@@ -686,6 +686,8 @@ def _svc_cfg_view(code: str, service: str, rid: int, mailbox: str):
             InlineKeyboardButton(text="👤 Имя", callback_data=f"svc:e:sn:{code}:{service}:{rid}:{mailbox}"),
             InlineKeyboardButton(text="🏷 Тайтл", callback_data=f"svc:e:st:{code}:{service}:{rid}:{mailbox}"),
         ],
+        [InlineKeyboardButton(text=_uniq_btn_label(service, rid, mailbox),
+                              callback_data=f"uniq:o:{code}:{service}:{rid}:{mailbox}")],
         *([[InlineKeyboardButton(text="🗑 Шаблон", callback_data=f"svc:tpldel:{code}:{service}:{rid}")]]
           if _own_template_name(service, rid) else []),
         *ops[1:],
@@ -766,6 +768,142 @@ async def svc_tpl_del(cq: CallbackQuery):
     except Exception:
         pass
     await cq.answer("Шаблон убран" if ok else "Шаблона уже нет")
+
+
+# ═══════════════════ 🧬 Уникализация HTML-шаблона (htmlmix, п.106) ═══════════════════
+def _uniq_cfg_load(service: str, rid, mailbox: str) -> dict:
+    """Настройки уникализации для связки (слоятся рубрика→ALL, как имя/тайтл)."""
+    from bot.services import uniq
+    lay = service_cfg_layers(service, int(rid) or None, mailbox)
+    raw = lay["uniq_opts"][0] if "uniq_opts" in lay else None
+    return uniq.parse_cfg(raw)
+
+
+def _uniq_btn_label(service: str, rid, mailbox: str) -> str:
+    from bot.services import uniq
+    cfg = _uniq_cfg_load(service, rid, mailbox)
+    if cfg.get("on") and uniq.enabled_count(cfg):
+        return f"🧬 Уникализация: вкл · {uniq.enabled_count(cfg)} опц."
+    return "🧬 Уникализация: выкл"
+
+
+def _uniq_view(code: str, service: str, rid: int, mailbox: str):
+    from bot.services import uniq, keys
+    cfg = _uniq_cfg_load(service, rid, mailbox)
+    on = bool(cfg.get("on"))
+    opts = cfg.get("opts") or {}
+    tok = "✅ задан" if keys.get("htmlmix") else "❌ нет (OTHER → 🔑 Ключи)"
+    total, free = uniq.pool_stats(uniq.pool_key(service, int(rid) or None, mailbox))
+    scope = "ALL рубрик" if not int(rid) else "рубрика"
+    text = (
+        f"🧬 <b>Уникализация шаблона</b> — {_esc(service)} × {scope}\n\n"
+        f"• Статус: <b>{'🟢 включена' if on else '🔴 выключена'}</b>\n"
+        f"• Токен htmlmix: {tok}\n"
+        f"• Готовых вариантов в пуле: <b>{free}</b> из {total}\n\n"
+        "<i>Шаблон прогоняется через htmlmix: каждое письмо получает свой вариант HTML. "
+        "API отдаёт пачку (лимит 1 запрос/60 с), варианты берутся из неё; пул опустел и "
+        "рано дёргать API — письмо уйдёт с исходным шаблоном. «⚠️» — опции, меняющие "
+        "видимый текст (осторожно с плейсхолдерами).</i>"
+    )
+    rows = [[InlineKeyboardButton(
+        text=("🟢 Включена — выключить" if on else "🔴 Выключена — включить"),
+        callback_data=f"uniq:on:{code}:{service}:{rid}:{mailbox}")]]
+    for i, (k, _g, lbl, _d) in enumerate(uniq.OPTIONS):
+        mark = "☑️" if opts.get(k) else "⬜️"
+        rows.append([InlineKeyboardButton(text=f"{mark} {lbl}",
+                                          callback_data=f"uniq:t:{i}:{code}:{service}:{rid}:{mailbox}")])
+    rows.append([InlineKeyboardButton(text="🔄 Сбросить пул вариантов",
+                                      callback_data=f"uniq:clr:{code}:{service}:{rid}:{mailbox}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад",
+                                      callback_data=f"uniq:back:{code}:{service}:{rid}:{mailbox}")])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _uniq_save(service: str, rid, mailbox: str, cfg: dict) -> None:
+    from bot.services import uniq
+    _save_cfg(service, int(rid), mailbox, "uniq_opts", uniq.dump_cfg(cfg))
+
+
+async def _uniq_show(cq: CallbackQuery, code, service, rid, mailbox, note: str | None = None):
+    text, kb = _uniq_view(code, service, int(rid), mailbox)
+    if note:
+        text = note + "\n\n" + text
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("uniq:o:"))
+async def uniq_open(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    _, _, code, service, rid, mailbox = cq.data.split(":", 5)
+    await _uniq_show(cq, code, service, rid, mailbox)
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("uniq:on:"))
+async def uniq_toggle_on(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    _, _, code, service, rid, mailbox = cq.data.split(":", 5)
+    cfg = _uniq_cfg_load(service, rid, mailbox)
+    cfg["on"] = not cfg.get("on")
+    _uniq_save(service, rid, mailbox, cfg)
+    await _uniq_show(cq, code, service, rid, mailbox)
+    await cq.answer("Включено" if cfg["on"] else "Выключено")
+
+
+@router.callback_query(F.data.startswith("uniq:t:"))
+async def uniq_toggle_opt(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    from bot.services import uniq
+    _, _, idx, code, service, rid, mailbox = cq.data.split(":", 6)
+    cfg = _uniq_cfg_load(service, rid, mailbox)
+    try:
+        key = uniq.OPTIONS[int(idx)][0]
+    except (ValueError, IndexError):
+        await cq.answer("?", show_alert=True)
+        return
+    cfg["opts"][key] = 0 if cfg["opts"].get(key) else 1
+    _uniq_save(service, rid, mailbox, cfg)
+    # опции изменились → старый пул невалиден
+    uniq.clear_pool(uniq.pool_key(service, int(rid) or None, mailbox))
+    await _uniq_show(cq, code, service, rid, mailbox)
+    await cq.answer(("вкл " if cfg["opts"][key] else "выкл ") + uniq._LABEL.get(key, key))
+
+
+@router.callback_query(F.data.startswith("uniq:clr:"))
+async def uniq_clear(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    from bot.services import uniq
+    _, _, code, service, rid, mailbox = cq.data.split(":", 5)
+    uniq.clear_pool(uniq.pool_key(service, int(rid) or None, mailbox))
+    await _uniq_show(cq, code, service, rid, mailbox, note="🔄 Пул очищен — свежие варианты запросятся при отправке.")
+    await cq.answer("Пул сброшен")
+
+
+@router.callback_query(F.data.startswith("uniq:back:"))
+async def uniq_back(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    _, _, code, service, rid, mailbox = cq.data.split(":", 5)
+    text, kb = _svc_cfg_view(code, service, int(rid), mailbox)
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=kb)
+    await cq.answer()
 
 
 # ═══════════ 🧩 Сервисы: добавление/удаление стран и сервисов (п.61) ═══════════

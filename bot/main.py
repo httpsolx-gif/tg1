@@ -45,6 +45,8 @@ def _ensure_columns(engine):
         "ALTER TABLE service_rubric_config ALTER COLUMN rubric_id DROP NOT NULL",
         # имя файла шаблона, поставленного кидком файла с выбором рубрик (п.65)
         "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS template_name varchar",
+        # настройки уникализации htmlmix на связке сервис×рубрика (п.106)
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_opts varchar",
         # API-отправки (п.46): привязка SendLog к токену + данные клиента (id/username)
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS api_token_id integer",
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS ext_id varchar",
@@ -80,6 +82,7 @@ def init_db():
     import common.models.spamcheck  # noqa: F401  (SpamSeed, SpamCheckResult — авто-проверка на спам)
     import common.models.broadcast  # noqa: F401  (BcState, BcTarget — авторассылка по группам, userbot)
     import common.models.country  # noqa: F401  (Country — каталог стран, п.61; сервисы — таблица service)
+    import common.models.uniq_variant  # noqa: F401  (UniqVariant — пул уникализации htmlmix, п.106)
     SQLModel.metadata.create_all(engine)
     _ensure_columns(engine)
     from common import catalog

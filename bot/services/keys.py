@@ -11,7 +11,7 @@ from common.db import get_engine
 from common.models.appstate import AppState
 from common.security import encrypt_password, decrypt_password
 
-NAMES = {"cf": "Cloudflare", "namesilo": "NameSilo", "dynadot": "Dynadot"}
+NAMES = {"cf": "Cloudflare", "namesilo": "NameSilo", "dynadot": "Dynadot", "htmlmix": "HTMLMix (уник.)"}
 
 _engine = get_engine()
 
