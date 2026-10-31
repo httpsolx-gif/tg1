@@ -1,18 +1,25 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 ADMIN_BUTTONS = [
-    ["🧩 SRVS",  "📊 STATS", "👥 USERS"],
-    ["🛡 API",   "🧪 TEST",  "🚨 ALERT"],
-    ["🖥 NODES", "💾 BACKUP", "📦 OTHER"],
+    ["🧩 SRVS",  "🗂 RUBRICS", "📊 STATS"],
+    ["👥 USERS", "🛡 API",     "🧪 TEST"],
+    ["🚨 ALERT", "🖥 NODES",   "📦 OTHER"],
 ]
 
 # Разделы для ИНЛАЙН-меню. Убраны из меню: MAIL, TEMPL (в рубрики), AWS (внутрь NODES),
 # SPAM (внутрь TEST), BC (внутрь ALERT), SMTP и SHORT (п.82: вместо них 📦 OTHER, пока пусто;
-# хендлеры smtp/short живы — вернуть в OTHER, когда понадобятся).
+# хендлеры smtp/short живы — вернуть в OTHER, когда понадобятся); BACKUP — внутри OTHER (п.86).
+
+
+def kb_other_root() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💾 BACKUP", callback_data="bk:root")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")],
+    ])
 ADMIN_SECTIONS = [
-    ("🧩 SRVS", "srvs"), ("📊 STATS", "stats"), ("👥 USERS", "users"), ("🛡 API", "api"),
-    ("🧪 TEST", "test"), ("🚨 ALERT", "alert"), ("🖥 NODES", "nodes"), ("💾 BACKUP", "backup"),
-    ("📦 OTHER", "other"),
+    ("🧩 SRVS", "srvs"), ("🗂 RUBRICS", "rubrics"), ("📊 STATS", "stats"),
+    ("👥 USERS", "users"), ("🛡 API", "api"), ("🧪 TEST", "test"),
+    ("🚨 ALERT", "alert"), ("🖥 NODES", "nodes"), ("📦 OTHER", "other"),
 ]
 
 

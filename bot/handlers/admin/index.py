@@ -106,7 +106,8 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
     from bot.keyboards.short_menu import kb_short_root
     from bot.handlers.admin.nodes import kb_nodes_root
     from bot.handlers.admin.tpl import kb_templates_root
-    from bot.handlers.admin.rubrics import kb_srvs_root
+    from bot.handlers.admin.rubrics import kb_srvs_root, kb_rubrics_root, _COUNTRIES_TXT
+    from bot.keyboards.admin_menu import kb_other_root
     from bot.handlers.admin.stats import kb_stats_root
     from bot.handlers.admin.backup import kb_backup_root
     from bot.handlers.admin.test import kb_test_root
@@ -121,7 +122,9 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         "short": ("🔗 Short menu", kb_short_root),
         "nodes": ("🖥 NODES — ноды отправки:", kb_nodes_root),
         "templ": ("📑 TEMPLATES — шаблоны писем:", kb_templates_root),
-        "srvs": ("🧩 SRVS:", kb_srvs_root),
+        "srvs": (_COUNTRIES_TXT, kb_srvs_root),
+        "rubrics": ("🗂 РУБРИКИ — выберите рубрику или добавьте:", kb_rubrics_root),
+        "other": ("📦 <b>OTHER</b>", kb_other_root),
         "stats": ("📊 <b>STATS</b> — отправки / переходы / конверсия:", kb_stats_root),
         "backup": ("💾 <b>BACKUP</b> — резервные копии и выгрузка БД:", kb_backup_root),
         "test": ("🧪 <b>TEST</b> — проверки и удаление нерабочих:", kb_test_root),
@@ -141,7 +144,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         return
 
     # заглушки — просто текст + кнопка назад в админку
-    stubs = {"other": "📦 <b>OTHER</b>\n\nПока пусто."}
+    stubs = {}
     text = stubs.get(sec, "Раздел не найден.")
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")]])
@@ -172,12 +175,18 @@ async def admin_short(m: Message):
 async def admin_other(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")]])
-    await m.answer("📦 <b>OTHER</b>\n\nПока пусто.", reply_markup=kb)
+    from bot.keyboards.admin_menu import kb_other_root
+    await m.answer("📦 <b>OTHER</b>", reply_markup=kb_other_root())
 
 @router.message(F.text.in_({"🧩 SRVS", "SRVS"}))
 async def admin_srvs(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from bot.handlers.admin.rubrics import show_srvs_root
+    await show_srvs_root(m)
+
+@router.message(F.text.in_({"🗂 RUBRICS", "RUBRICS"}))
+async def admin_rubrics(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     from bot.handlers.admin.rubrics import show_rubrics_root

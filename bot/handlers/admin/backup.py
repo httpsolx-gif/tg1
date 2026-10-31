@@ -33,7 +33,7 @@ def kb_backup_root() -> InlineKeyboardMarkup:
         [_btn("📦 Выгрузить все БД (в чат)", "bk:export")],
         [_btn("💾 Бэкап в канал сейчас", "bk:channel")],
         [_btn(f"🔁 Авто-бэкап: {auto}", "bk:info")],
-        [_btn("⬅️ Назад", "admin:back")],
+        [_btn("⬅️ Назад", "adm:other")],
     ])
 
 

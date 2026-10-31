@@ -122,7 +122,7 @@ def kb_rubrics_root() -> InlineKeyboardMarkup:
     for r in rubrics:
         rows.append([InlineKeyboardButton(text=f"🗂 {r.name}", callback_data=f"rub:open:{r.id}")])
     rows.append([InlineKeyboardButton(text="➕ Добавить рубрику", callback_data="rub:add")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="srv:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -441,19 +441,15 @@ async def rub_edit_value(m: Message, state: FSMContext):
     await m.answer(f"✅ Сохранено.\n\n{text}", reply_markup=kb)
 
 
-# ═══════════ SRVS: меню (Рубрики + Сервисы) ═══════════
+# ═══════════ SRVS = сразу Сервисы (страны); Рубрики — отдельный раздел админки (п.86) ═══════════
 def kb_srvs_root() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧩 Сервисы", callback_data="svc:root")],
-        [InlineKeyboardButton(text="🗂 Рубрики", callback_data="rub:root")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="rub:back")],
-    ])
+    return _kb_countries()
 
 
 async def show_srvs_root(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
-    await m.answer("🧩 SRVS:", reply_markup=kb_srvs_root())
+    await m.answer(_COUNTRIES_TXT, reply_markup=kb_srvs_root())
 
 
 @router.callback_query(F.data == "srv:root")
@@ -463,9 +459,9 @@ async def srv_root(cq: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     try:
-        await cq.message.edit_text("🧩 SRVS:", reply_markup=kb_srvs_root())
+        await cq.message.edit_text(_COUNTRIES_TXT, reply_markup=kb_srvs_root())
     except Exception:
-        await cq.message.answer("🧩 SRVS:", reply_markup=kb_srvs_root())
+        await cq.message.answer(_COUNTRIES_TXT, reply_markup=kb_srvs_root())
     await cq.answer()
 
 
@@ -515,7 +511,7 @@ def _kb_countries() -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data="sco:o:*:*:0")]]
     rows += [btns[i:i + 3] for i in range(0, len(btns), 3)]
     rows.append([InlineKeyboardButton(text="➕ Добавить страну", callback_data="svc:cadd")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="srv:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
