@@ -237,11 +237,11 @@ async def _do_send(target, payload: dict, *, user_id: Optional[int]) -> None:
     # всё динамическое экранируем: parse_mode=HTML, а ответы SMTP вида «550 <a@b.c>: …»
     # иначе ломают сообщение — юзер не видит ни результата, ни кнопок
     frm = f"{_esc(sender)} &lt;{_esc(from_disp or '')}&gt;" if sender else _esc(from_disp or "—")
+    rub = str(payload.get("rubric_name") or "").split(" · ")[0] or "—"  # без «· mailbox»
     lines = [
-        "Отправлено" if ok else "❌ Ошибка при отправке",
+        "Отправлено ✅" if ok else "❌ Ошибка при отправке",
         "",
-        f"Сервис: {_esc(payload.get('service') or '—')}",
-        f"Рубрика: {_esc(str(payload.get('rubric_name')))}",
+        f"Рубрика: {_esc(rub)}",
         f"Ссылка: {_esc(short or '—')}",
         f"Кому: {_esc(payload['email'])}",
         f"От: {frm}",
