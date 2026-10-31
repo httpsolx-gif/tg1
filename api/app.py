@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from api.routes.redirect import router as redirect_router
 from api.routes.logs import router as logs_router
 from api.routes.send import router as send_router
+from api.routes.client_docs import router as client_docs_router
 from api import worker
 
 
@@ -61,4 +62,5 @@ def build_app() -> FastAPI:
     app.include_router(redirect_router)
     app.include_router(logs_router)
     app.include_router(send_router)
+    app.include_router(client_docs_router)  # «/» — инструкция клиенту (api/CLIENT.md)
     return app
