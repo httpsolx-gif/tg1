@@ -197,6 +197,8 @@ CONFS = load_confs()
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    server_version = ""  # без «BaseHTTP/x Python/x» — не светим стек
+    sys_version = ""
     def log_message(self, *a):
         sys.stderr.write("%s - %s\n" % (self.address_string(), a[0] % a[1:]))
     def _host(self):
@@ -212,10 +214,13 @@ class H(BaseHTTPRequestHandler):
             self.wfile.write(body)
     def do_GET(self):
         path = self.path.split("?", 1)[0].lstrip("/")
+        host = self._host()
+        if host not in CONFS:  # чужой Host (сканер/чужая CF-зона на наш IP) — молча рвём
+            self.close_connection = True
+            return
         if path in ("healthz", "favicon.ico", ""):
             self._send(200, b"ok", {"Content-Type": "text/plain"})
             return
-        host = self._host()
         row = lookup_link(host, path)
         if not row:
             self._send(404, b"not found")
@@ -239,8 +244,11 @@ def build_ctx():
         pc.load_cert_chain(c["cert"], c["key"])
         per[c["domain"].lower()] = pc
     def sni(sock, servername, sslctx):
-        if servername and servername.lower() in per:
-            sock.context = per[servername.lower()]
+        # без SNI или с чужим именем — рвём handshake: сертификат с нашим доменом
+        # не отдаём никому, кто не знает домен (защита, если фаервол вдруг слетит)
+        if not servername or servername.lower() not in per:
+            return ssl.ALERT_DESCRIPTION_UNRECOGNIZED_NAME
+        sock.context = per[servername.lower()]
     ctx.sni_callback = sni
     return ctx
 
@@ -258,7 +266,9 @@ if __name__ == "__main__":
 
 SYSTEMD_UNIT = """[Unit]
 Description=shortcf redirect service
-After=network.target
+# сначала фаервол CF-only, потом слушаем 443 (и при загрузке тоже)
+After=network.target shortcf-fw.service
+Requires=shortcf-fw.service
 
 [Service]
 ExecStart=/usr/bin/env python3 /opt/shortcf/server.py

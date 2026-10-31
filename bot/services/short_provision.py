@@ -5,6 +5,7 @@
 IP: генерим ключ+CSR на ноде, выпускаем origin-сертификат в CF, ставим мини-сервис
 редиректа (systemd, TLS с origin-cert), закрываем 80/443 фаерволом только для IP CF,
 проверяем 301 локально. В конце поднимаем SSL до strict.
+Порядок важен для анонимности IP: фаервол CF-only ставится ПЕРВЫМ, сервис стартует после.
 
 Предполагается Debian/Ubuntu с root-доступом, python3, systemd. Каждый шаг
 возвращает строку в лог; первая ошибка останавливает и пишется в last_error.
@@ -61,6 +62,19 @@ async def provision(node, domain_row, cf_token: str, secret_b64: str) -> tuple[b
                   timeout=180)
         log.append("✅ зависимости (openssl/nft) и каталоги")
 
+        # 1b. фаервол: 80/443 только с IP Cloudflare (SSH не трогаем) — ДО ключа/сервиса:
+        # иначе между стартом сервиса и фаерволом 443 открыт миру и сканеры (Censys/Shodan)
+        # увидят сертификат с нашим доменом на этом IP = утечка. Не встал фаервол — дальше не идём.
+        v4, v6 = await cf.cf_ip_ranges()
+        if not v4:
+            raise ProvisionError("не получен список IP Cloudflare — фаервол не ставлю, сервис не запускаю")
+        nft = _nft_ruleset(v4, v6)
+        await _write_file(node, f"{CONF_DIR}/nftables.conf", nft, mode="644")
+        await _write_file(node, "/etc/systemd/system/shortcf-fw.service", _FW_UNIT, mode="644")
+        await _sh(node, "systemctl daemon-reload && systemctl enable shortcf-fw >/dev/null 2>&1 && "
+                        "systemctl restart shortcf-fw && nft list table inet shortcf >/dev/null")
+        log.append(f"✅ фаервол CF-only ({len(v4)} v4 / {len(v6)} v6) — до запуска сервиса")
+
         # 2. ключ + CSR на ноде (приватный ключ не покидает сервер; CSR в stdout)
         csr = await _sh(node,
                         f"openssl req -new -newkey rsa:2048 -nodes -keyout {key_path} "
@@ -94,16 +108,7 @@ async def provision(node, domain_row, cf_token: str, secret_b64: str) -> tuple[b
                         "systemctl restart shortcf", timeout=40)
         log.append("✅ мини-сервис shortcf (systemd) запущен")
 
-        # 5. фаервол: 80/443 только с IP Cloudflare (SSH не трогаем)
-        v4, v6 = await cf.cf_ip_ranges()
-        nft = _nft_ruleset(v4, v6)
-        await _write_file(node, f"{CONF_DIR}/nftables.conf", nft, mode="644")
-        await _sh(node, f"nft -f {CONF_DIR}/nftables.conf")
-        await _write_file(node, "/etc/systemd/system/shortcf-fw.service", _FW_UNIT, mode="644")
-        await _sh(node, "systemctl daemon-reload && systemctl enable shortcf-fw >/dev/null 2>&1 || true")
-        log.append(f"✅ фаервол CF-only ({len(v4)} v4 / {len(v6)} v6)")
-
-        # 6. локальная проверка 301: регистрируем проверочный код и дергаем его по SNI на 127.0.0.1
+        # 5. локальная проверка 301: регистрируем проверочный код и дергаем его по SNI на 127.0.0.1
         from bot.services.short_domain import register_link
         health = await _sh(node,
                            f"sleep 1; curl -sk --connect-timeout 5 --max-time 10 -o /dev/null "
@@ -118,7 +123,7 @@ async def provision(node, domain_row, cf_token: str, secret_b64: str) -> tuple[b
             raise ProvisionError(f"проверка редиректа не прошла (health={health}, loc={loc[:120]})")
         log.append("✅ редирект 301 проверен локально")
 
-        # 7. SSL до strict, если встал origin-cert
+        # 6. SSL до strict, если встал origin-cert
         if strict and domain_row.cf_zone_id:
             try:
                 await cf.set_ssl(cf_token, domain_row.cf_zone_id, "strict")

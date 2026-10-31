@@ -406,6 +406,7 @@ async def sdom_checkns(cq: CallbackQuery):
         await cf.set_ssl(token, zone_id, "full")
         await cf.always_use_https(token, zone_id, True)
         rid = await cf.upsert_a_record(token, zone_id, domain, origin_ip, proxied=True)
+        leaks = await cf.hide_origin_ip(token, zone_id, origin_ip)
     except Exception as e:
         with Session(_engine) as db:
             d = db.get(ShortDomain, did)
@@ -420,9 +421,11 @@ async def sdom_checkns(cq: CallbackQuery):
         d.last_error = None
         d.activated_at = sc.now_iso()
         db.add(d); db.commit()
+    leak_note = ("\n\n⚠️ В зоне были записи, светившие IP origin — исправлено:\n"
+                 + "\n".join(f"• {_esc(x)}" for x in leaks)) if leaks else ""
     await cq.message.answer(
         "✅ Зона <b>active</b>, SSL=Full, A-запись создана <b>проксированной</b> (IP origin скрыт). "
-        "Теперь можно настроить сервер."
+        "Теперь можно настроить сервер." + leak_note
     )
     await _show_card(cq, did)
 
@@ -514,6 +517,7 @@ async def sdom_setnode(cq: CallbackQuery):
     # 1) перекинуть проксированную A-запись на новый IP
     try:
         rid = await cf.upsert_a_record(token, zone_id, domain, newip, proxied=True)
+        await cf.hide_origin_ip(token, zone_id, newip)
     except Exception as e:
         await cq.message.answer(f"🔴 CF A-запись: <code>{_esc(str(e)[:200])}</code>")
         return

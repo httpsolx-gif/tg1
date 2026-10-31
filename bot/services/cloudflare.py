@@ -127,6 +127,35 @@ async def verify_token(token: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+async def hide_origin_ip(token: str, zone_id: str, ip: str) -> list[str]:
+    """Утечка IP через DNS: все записи зоны, где встречается IP origin, должны быть
+    проксированы. A/AAAA/CNAME без облака — включаем облако; непроксируемые (MX/TXT/SPF/SRV…)
+    с этим IP — удаляем. → список того, что исправлено (для лога)."""
+    fixed: list[str] = []
+    page = 1
+    while True:
+        recs = await _api(token, "GET", f"/zones/{zone_id}/dns_records?per_page=100&page={page}")
+        if not isinstance(recs, list) or not recs:
+            break
+        for r in recs:
+            if ip not in str(r.get("content", "")):
+                continue
+            if r.get("proxied"):
+                continue
+            rid, name, typ = r["id"], r.get("name"), r.get("type")
+            if typ in ("A", "AAAA", "CNAME"):
+                body = {"type": typ, "name": name, "content": r["content"], "proxied": True, "ttl": 1}
+                await _api(token, "PUT", f"/zones/{zone_id}/dns_records/{rid}", json=body)
+                fixed.append(f"{typ} {name}: включено облако")
+            else:
+                await _api(token, "DELETE", f"/zones/{zone_id}/dns_records/{rid}")
+                fixed.append(f"{typ} {name}: удалена (светила IP)")
+        if len(recs) < 100:
+            break
+        page += 1
+    return fixed
+
+
 async def cf_ip_ranges(timeout: int = 20) -> tuple[list[str], list[str]]:
     """Диапазоны IP Cloudflare (v4, v6) — для фаервола origin. Без авторизации."""
     to = aiohttp.ClientTimeout(total=timeout)
