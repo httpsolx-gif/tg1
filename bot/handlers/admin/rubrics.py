@@ -787,6 +787,23 @@ def _uniq_btn_label(service: str, rid, mailbox: str) -> str:
     return "🧬 Уникализация: выкл"
 
 
+def _rubrics_with_own_template(service: str) -> list[str]:
+    """Рубрики сервиса, у которых есть СВОЙ шаблон (оверрайд или в библиотеке)."""
+    from bot.services.templates import resolve_template_html
+    out: list[str] = []
+    with Session(_engine) as db:
+        rubs = [(r.id, r.name) for r in db.exec(select(Rubric)).all()]
+    for rid_, name in rubs:
+        if name == "black":
+            continue
+        code_ = (name[:1] or "").lower()
+        with Session(_engine) as db:
+            row = _cfg_row(db, service, rid_, "")
+        if (row and row.template_html) or resolve_template_html(service, code_) is not None:
+            out.append(name)
+    return out
+
+
 def _uniq_view(code: str, service: str, rid: int, mailbox: str):
     from bot.services import uniq, keys
     cfg = _uniq_cfg_load(service, rid, mailbox)
@@ -794,11 +811,20 @@ def _uniq_view(code: str, service: str, rid: int, mailbox: str):
     opts = cfg.get("opts") or {}
     tok = "✅ задан" if keys.get("htmlmix") else "❌ нет (OTHER → 🔑 Ключи)"
     scope = "ALL рубрик" if not int(rid) else "рубрика"
+    # На ALL уникализация применится, только если на ALL задан свой шаблон. Если у рубрик
+    # свои шаблоны — вариант из ALL (станд. шаблон) при отправке не совпадёт → предупреждаем.
+    warn = ""
+    if not int(rid):
+        own = _rubrics_with_own_template(service)
+        if own:
+            warn = ("⚠️ <b>У рубрик свои шаблоны</b> (" + ", ".join(_esc(n) for n in own) +
+                    "). На «ALL» уникализация к ним НЕ применится — включите её на самой рубрике.\n\n")
     sched = cfg.get("mode") == "schedule"
     mode_txt = ("по расписанию: " + ", ".join(cfg.get("times") or [])) if sched else "вручную (кнопкой)"
     status = uniq.status_line(service, int(rid) or None, mailbox, cfg)
     text = (
         f"🧬 <b>Уникализация шаблона</b> — {_esc(service)} × {scope}\n\n"
+        f"{warn}"
         f"• Статус: <b>{'🟢 включена' if on else '🔴 выключена'}</b>\n"
         f"• Токен htmlmix: {tok}\n"
         f"• Обновление: <b>{mode_txt}</b>\n"
