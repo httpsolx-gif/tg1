@@ -1,9 +1,9 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 ADMIN_BUTTONS = [
-    ["🧩 SRVS",  "📊 STATS", "👥 USERS", "🛡 API"],
-    ["🧪 TEST",  "🚨 ALERT", "🖥 NODES", "💾 BACKUP"],
-    ["📦 OTHER"],
+    ["🧩 SRVS",  "📊 STATS", "👥 USERS"],
+    ["🛡 API",   "🧪 TEST",  "🚨 ALERT"],
+    ["🖥 NODES", "💾 BACKUP", "📦 OTHER"],
 ]
 
 # Разделы для ИНЛАЙН-меню. Убраны из меню: MAIL, TEMPL (в рубрики), AWS (внутрь NODES),
@@ -20,7 +20,7 @@ def admin_menu_inline() -> InlineKeyboardMarkup:
     rows, row = [], []
     for label, key in ADMIN_SECTIONS:
         row.append(InlineKeyboardButton(text=label, callback_data=f"adm:{key}"))
-        if len(row) == 4:
+        if len(row) == 3:
             rows.append(row)
             row = []
     if row:
@@ -30,7 +30,7 @@ def admin_menu_inline() -> InlineKeyboardMarkup:
 
 def admin_menu() -> ReplyKeyboardMarkup:
     rows = []
-    # Основные разделы (строки по 4 кнопки)
+    # Основные разделы (строки по 3 кнопки)
     for row in ADMIN_BUTTONS:
         rows.append([KeyboardButton(text=txt) for txt in row])
     # «Назад» отдельной строкой
