@@ -162,9 +162,9 @@ def _auto_view(sid: int):
                if cur else "")
     text = f"🔁 Автосмена: <b>{_auto_txt(cfg)}</b>{cur_txt}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("🔴 Выключить" if cfg.autoswitch else "🟢 Включить", f"sco:autotog:{sid}")],
+        [_btn("Выключить" if cfg.autoswitch else "Включить", f"sco:autotog:{sid}")],
         [_btn(f"📈 Лимит автосмены: {cfg.switch_limit or '—'}", f"sco:autolim:{sid}")],
-        [_btn(f"🔄 По кругу: {'вкл 🟢' if cfg.wrap else 'выкл 🔴'}", f"sco:wraptog:{sid}")],
+        [_btn(f"🔄 По кругу: {'вкл' if cfg.wrap else 'выкл'}", f"sco:wraptog:{sid}")],
         [_btn("⏭ Принуд. смена", f"sco:forced:{sid}")],
         [_btn("📤 Выгрузка SMTP", f"sco:dl:{sid}")],
         [_btn("⬅️ Назад", f"sco:card:{sid}")],
@@ -774,7 +774,7 @@ def _acc_view(sid: int, acc_id: int):
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [_btn("📈 Лимит", f"sco:lim:{sid}:{a.id}"), _btn("♻️ Сброс счётчика", f"sco:reset:{sid}:{a.id}")],
-        [_btn("🔴 Выключить" if a.is_active else "🟢 Включить", f"sco:tog:{sid}:{a.id}")],
+        [_btn("Выключить" if a.is_active else "Включить", f"sco:tog:{sid}:{a.id}")],
         [_btn("🗑 Убрать из базы", f"sco:accdel:{sid}:{a.id}")],
         [_btn("⬅️ Список", f"sco:accs:{sid}")],
     ])
@@ -893,7 +893,7 @@ def _aws_view(sid: int, aws_id: int):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [_btn("📈 Лимит", f"sco:awslim:{sid}:{a.id}"), _btn("♻️ Сброс счётчика", f"sco:awsreset:{sid}:{a.id}")],
         [_btn("🧪 Тест квоты", f"sco:awstest:{sid}:{a.id}"),
-         _btn("🔴 Выключить" if a.is_active else "🟢 Включить", f"sco:awstog:{sid}:{a.id}")],
+         _btn("Выключить" if a.is_active else "Включить", f"sco:awstog:{sid}:{a.id}")],
         [_btn("🗑 Убрать из базы", f"sco:awsdel:{sid}:{a.id}")],
         [_btn("⬅️ Список", f"sco:accs:{sid}")],
     ])
