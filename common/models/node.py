@@ -19,6 +19,8 @@ class Node(SQLModel, table=True):
     is_backup: bool = False    # резервная: берётся для отправки, только если основные не отвечают (п.59)
     is_active: bool = True
     error_count: int = 0
+    fw_applied: str = ""         # подпись применённой защиты (node_guard.desired_sig); '' = не ставилась
+    fw_error: str | None = None   # последняя ошибка установки защиты
 
     def has_role(self, role: str) -> bool:
         p = self.purpose

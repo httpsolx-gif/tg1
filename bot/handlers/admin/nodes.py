@@ -1,5 +1,7 @@
+import html as _html
 import logging
 import re
+import asyncio
 import time
 from typing import List, Tuple
 
@@ -13,7 +15,7 @@ from common.models.node import Node
 from common.security import encrypt_password
 from common.config import settings
 from bot.fsm.admin import NodeAdd, NodeEdit
-from bot.services import node_pool
+from bot.services import node_guard, node_pool
 
 router = Router(name="nodes-admin")
 log = logging.getLogger("bot")
@@ -87,7 +89,8 @@ def _node_view(nid: int):
         f"• Роль: <b>{_ROLE_RU.get(purpose, purpose)}</b>\n"
         f"• Регион (гео AWS): <b>{n.region or '—'}</b>\n"
         f"• Тип: <b>{'🛟 резервная' if n.is_backup else 'основная'}</b>\n"
-        f"• Статус: {mark}\n\n"
+        f"• Статус: {mark}\n"
+        f"• Защита: {_fw_line(n)}\n\n"
         "<i>Резервная берётся для отправки, только если основные не отвечают по SSH. "
         "Основная поднялась — письма сами возвращаются на неё.</i>"
     )
@@ -101,10 +104,19 @@ def _node_view(nid: int):
             InlineKeyboardButton(text=toggle, callback_data=f"node:toggle:{nid}"),
             InlineKeyboardButton(text="🧪 Тест SSH", callback_data=f"node:test:{nid}"),
         ],
+        [InlineKeyboardButton(text="🛡 Переустановить защиту", callback_data=f"node:fw:{nid}")],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"node:del:{nid}")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="node:root")],
     ])
     return text, kb
+
+
+def _fw_line(n: Node) -> str:
+    if n.fw_applied and n.fw_applied == node_guard.desired_sig(n):
+        return "🛡 фаервол + fail2ban"
+    if n.fw_error:
+        return f"🔴 не встала — <code>{_html.escape(n.fw_error[:200])}</code>"
+    return "⏳ ставится автоматически (до минуты)"
 
 
 # ---------- entry (из админ-меню) ----------
@@ -254,12 +266,33 @@ async def node_role(cq: CallbackQuery):
         db.add(n)
         db.commit()
         new = n.purpose
+    # 80/443 открываются/закрываются по роли — докатить защиту сразу, не ждать цикла
+    asyncio.create_task(node_guard.ensure(nid, cq.bot))
     text, kb = _node_view(nid)
     try:
         await cq.message.edit_text(text, reply_markup=kb)
     except Exception:
         pass
     await cq.answer(f"Роль: {new}")
+
+
+@router.callback_query(F.data.startswith("node:fw:"))
+async def node_fw(cq: CallbackQuery):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    nid = int(cq.data.split(":")[-1])
+    await cq.answer("⏳ Ставлю защиту…")
+    state, info = await node_guard.ensure(nid, force=True)
+    text, kb = _node_view(nid)
+    if not text:
+        return
+    note = {"ok": "✅ Защита установлена", "busy": "⏳ Уже ставится — обновите карточку через минуту"}
+    text += "\n\n" + note.get(state, f"🔴 <code>{_html.escape(info or state)}</code>")
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data.startswith("node:region:"))

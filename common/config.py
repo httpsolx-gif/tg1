@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     LEADER_RETRY_SEC: int = 5
     LEADER_HEARTBEAT_SEC: int = 5
 
+    # доп. IP/сети, которые fail2ban на нодах не банит (резервный сервер бота и т.п.)
+    NODE_TRUST_IPS: str = ""
+
     LOG_LEVEL: str = "INFO"
     LOG_TO_FILES: int = 1
     LOG_RETENTION_DAYS: int = 14

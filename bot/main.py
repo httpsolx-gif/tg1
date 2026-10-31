@@ -23,6 +23,9 @@ def _ensure_columns(engine):
         "ALTER TABLE node ADD COLUMN IF NOT EXISTS purpose varchar NOT NULL DEFAULT 'send'",
         # резервная нода отправки (п.59)
         "ALTER TABLE node ADD COLUMN IF NOT EXISTS is_backup boolean NOT NULL DEFAULT false",
+        # защита нод: фаервол + fail2ban (node_guard)
+        "ALTER TABLE node ADD COLUMN IF NOT EXISTS fw_applied varchar NOT NULL DEFAULT ''",
+        "ALTER TABLE node ADD COLUMN IF NOT EXISTS fw_error varchar",
         "ALTER TABLE short_domain ADD COLUMN IF NOT EXISTS registrar varchar",
         "ALTER TABLE short_domain ADD COLUMN IF NOT EXISTS registrar_token_enc varchar",
         "ALTER TABLE sendlog ADD COLUMN IF NOT EXISTS country varchar",
@@ -154,6 +157,13 @@ async def main():
         asyncio.create_task(short_autoloop(bot))
     except Exception as e:
         logging.getLogger("bot").warning("short autoloop not started: %s", e)
+
+    # Защита нод (фаервол + fail2ban) — сама докатывается на новые/изменённые ноды
+    try:
+        from bot.services.node_guard import guard_loop
+        asyncio.create_task(guard_loop(bot))
+    except Exception as e:
+        logging.getLogger("bot").warning("node guard loop not started: %s", e)
 
     logging.getLogger("bot").info("🚀 Bot started")
     await dp.start_polling(bot)
