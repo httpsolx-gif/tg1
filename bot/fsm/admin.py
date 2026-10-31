@@ -75,8 +75,13 @@ class SmtpLimit(StatesGroup):
     value = State()
 
 
+class KeyInput(StatesGroup):
+    """OTHER → 🔑 Ключи: ждём значение ключа. data: key_name (cf|namesilo|dynadot)."""
+    value = State()
+
+
 class ShortDomainAdd(StatesGroup):
-    """Добавление личного short-домена: домен → CF токен → e-mail → токен регистратора → нода."""
+    """Добавление личного short-домена: домен → (CF токен, если не задан в 🔑 Ключи) → нода."""
     domain = State()
     token = State()
     email = State()

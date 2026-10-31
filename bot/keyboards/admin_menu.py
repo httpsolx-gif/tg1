@@ -13,6 +13,7 @@ ADMIN_BUTTONS = [
 
 def kb_other_root() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Ключи", callback_data="key:root")],
         [InlineKeyboardButton(text="💾 BACKUP", callback_data="bk:root")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")],
     ])

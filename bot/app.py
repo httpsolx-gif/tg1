@@ -14,6 +14,7 @@ from bot.handlers.admin.scope_ops import router as scope_ops_router
 from bot.handlers.admin.short_domains import router as short_domains_router
 from bot.handlers.admin.stats import router as stats_router
 from bot.handlers.admin.backup import router as backup_router
+from bot.handlers.admin.keys import router as keys_router
 from bot.handlers.admin.test import router as test_router
 from bot.handlers.admin.users import router as users_router
 from bot.handlers.admin.sends import router as sends_router
@@ -43,6 +44,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(short_domains_router)
     dp.include_router(stats_router)
     dp.include_router(backup_router)
+    dp.include_router(keys_router)
     dp.include_router(test_router)
     dp.include_router(users_router)
     dp.include_router(sends_router)

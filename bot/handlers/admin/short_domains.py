@@ -25,6 +25,7 @@ from common.models.scope import ScopeCfg
 from bot.fsm.admin import ShortDomainAdd
 from bot.services import cloudflare as cf
 from bot.services import scope as sc
+from bot.services import keys
 from bot.services.short_domain import gen_secret
 
 router = Router(name="short-domains")
@@ -43,6 +44,33 @@ def _admin(uid: int) -> bool:
 
 def _btn(t: str, cb: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=t, callback_data=cb)
+
+
+def _cf_token(d: ShortDomain) -> str:
+    """Общий токен CF (OTHER → 🔑 Ключи); старый, сохранённый в домене, — запасной."""
+    return keys.get("cf") or decrypt_password(d.cf_token_enc or "")
+
+
+def _registrar_key(d: ShortDomain) -> str:
+    return keys.get(d.registrar or "") or decrypt_password(d.registrar_token_enc or "")
+
+
+_REG_RU = {"namesilo": "NameSilo", "dynadot": "Dynadot"}
+
+
+async def _detect_registrar(zone: str) -> str | None:
+    """Чей домен: NameSilo (если ключ есть и домен в аккаунте), иначе Dynadot (если ключ есть)."""
+    ns_key, dd_key = keys.get("namesilo"), keys.get("dynadot")
+    if ns_key:
+        from bot.services import namesilo
+        try:
+            await namesilo.get_nameservers(ns_key, zone)
+            return "namesilo"
+        except Exception:
+            pass
+    if dd_key:
+        return "dynadot"
+    return None
 
 
 def _apex(domain: str) -> str:
@@ -81,8 +109,8 @@ def _card(did: int):
 
     rows = []
     if d.status in ("zone", "pending_ns"):
-        if d.registrar_token_enc:
-            rows.append([_btn("⚡ Авто-NS (NameSilo)", f"sdom:autons:{did}")])
+        if d.registrar and _registrar_key(d):
+            rows.append([_btn(f"⚡ Авто-NS ({_REG_RU.get(d.registrar, d.registrar)})", f"sdom:autons:{did}")])
         rows.append([_btn("🔄 Проверить NS / активацию", f"sdom:checkns:{did}")])
     if d.status in ("active", "error", "provisioning"):
         rows.append([_btn("⚙️ Настроить сервер (origin)", f"sdom:provision:{did}")])
@@ -200,12 +228,22 @@ async def sdom_in_domain(m: Message, state: FSMContext):
         await m.answer("Нужен корректный домен, напр. <code>go.example.com</code>. Ещё раз:")
         return
     await state.update_data(domain=dom, zone_name=_apex(dom))
+    if keys.get("cf"):  # токен уже задан в OTHER → 🔑 Ключи — сразу к ноде
+        await _ask_node(m, state, f"Зона CF будет: <code>{_esc(_apex(dom))}</code>\n\n")
+        return
     await state.set_state(ShortDomainAdd.token)
     await m.answer(
         f"Зона CF будет: <code>{_esc(_apex(dom))}</code>\n\n"
-        "🔑 Пришлите <b>Cloudflare API Token</b> (scoped: Zone·DNS·Edit + SSL and Certificates·Edit).",
+        "🔑 Токен Cloudflare не задан (OTHER → 🔑 Ключи). Пришлите <b>Cloudflare API Token</b> "
+        "(scoped: Zone·DNS·Edit + SSL and Certificates·Edit) — сохраню его в ключи:",
         reply_markup=_cancel_kb(),
     )
+
+
+async def _ask_node(m: Message, state: FSMContext, head: str = "") -> None:
+    await state.set_state(ShortDomainAdd.node)
+    note, kb = _nodes_kb()
+    await m.answer(head + "🖥 Выберите <b>origin-ноду</b> (где встанет редирект за CF):" + note, reply_markup=kb)
 
 
 @router.message(ShortDomainAdd.token, F.text)
@@ -222,10 +260,8 @@ async def sdom_in_token(m: Message, state: FSMContext):
         await m.answer(f"🔴 Токен не прошёл проверку: <code>{_esc(info[:200])}</code>\nПришлите другой:",
                        reply_markup=_cancel_kb())
         return
-    await state.update_data(token=token)
-    await state.set_state(ShortDomainAdd.email)
-    await m.answer("✅ Токен валиден.\n\n📧 E-mail для SSL/аккаунта CF (или <code>-</code> чтобы пропустить):",
-                   reply_markup=_cancel_kb())
+    keys.set("cf", token)
+    await _ask_node(m, state, "✅ Токен валиден и сохранён в OTHER → 🔑 Ключи.\n\n")
 
 
 def _nodes_kb() -> tuple[str, InlineKeyboardMarkup]:
@@ -241,38 +277,6 @@ def _nodes_kb() -> tuple[str, InlineKeyboardMarkup]:
     return note, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@router.message(ShortDomainAdd.email, F.text)
-async def sdom_in_email(m: Message, state: FSMContext):
-    if not _admin(m.from_user.id):
-        return
-    email = (m.text or "").strip()
-    email = None if email in ("-", "—") else email
-    await state.update_data(email=email)
-    await state.set_state(ShortDomainAdd.registrar)
-    await m.answer(
-        "🔑 Токен регистратора <b>NameSilo</b> для авто-смены NS "
-        "(или <code>-</code>, если NS пропишете вручную):",
-        reply_markup=_cancel_kb(),
-    )
-
-
-@router.message(ShortDomainAdd.registrar, F.text)
-async def sdom_in_registrar(m: Message, state: FSMContext):
-    if not _admin(m.from_user.id):
-        return
-    tok = (m.text or "").strip()
-    tok = None if tok in ("-", "—") else tok
-    if tok:
-        try:
-            await m.delete()  # не держим токен в истории чата
-        except Exception:
-            pass
-    await state.update_data(reg_token=tok)
-    await state.set_state(ShortDomainAdd.node)
-    note, kb = _nodes_kb()
-    await m.answer("🖥 Выберите <b>origin-ноду</b> (где встанет редирект за CF):" + note, reply_markup=kb)
-
-
 # ======================= добавление: создать зону CF =======================
 @router.callback_query(ShortDomainAdd.node, F.data.startswith("sdom:pick:"))
 async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
@@ -283,8 +287,12 @@ async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.clear()
     domain, zone = data["domain"], data["zone_name"]
-    token, email, bind_sid = data["token"], data.get("email"), int(data.get("bind_sid") or 0)
-    reg_token = data.get("reg_token")
+    token, email, bind_sid = keys.get("cf"), None, int(data.get("bind_sid") or 0)
+    if not token:
+        await cq.message.edit_text("🔴 Нет токена Cloudflare — задайте в OTHER → 🔑 Ключи.")
+        await cq.answer()
+        return
+    registrar = await _detect_registrar(zone)
 
     await cq.message.edit_text(f"⏳ Создаю зону <code>{_esc(zone)}</code> в Cloudflare…")
     try:
@@ -300,11 +308,10 @@ async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
         if d is None:
             d = ShortDomain(domain=domain)
         d.zone_name = zone
-        d.cf_token_enc = encrypt_password(token)
+        # токены — общие (keys); в домене только чей регистратор
         d.cf_account_email = email
         d.ssl_email = email
-        d.registrar = "namesilo" if reg_token else None
-        d.registrar_token_enc = encrypt_password(reg_token) if reg_token else None
+        d.registrar = registrar
         d.cf_zone_id = zone_id
         d.ns1 = ns[0] if len(ns) > 0 else None
         d.ns2 = ns[1] if len(ns) > 1 else None
@@ -326,8 +333,8 @@ async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
                 db.commit()
 
     bind_note = "\n\n🔗 Домен уже выбран как SHORT для области (заработает после готовности)." if bind_sid else ""
-    ns_note = ("Нажмите «⚡ Авто-NS (NameSilo)» ниже — пропишу сам."
-               if reg_token else "Это разовый шаг: смените NS у регистратора вручную.")
+    ns_note = (f"Нажмите «⚡ Авто-NS ({_REG_RU[registrar]})» ниже — пропишу сам."
+               if registrar else "Ключа регистратора нет (OTHER → 🔑 Ключи) — смените NS у регистратора вручную.")
     await cq.message.answer(
         "✅ Зона создана. Нужно прописать домену NS Cloudflare:\n"
         f"   <code>{_esc(d.ns1 or '')}</code>\n   <code>{_esc(d.ns2 or '')}</code>\n\n"
@@ -345,21 +352,26 @@ async def sdom_autons(cq: CallbackQuery):
     did = int(cq.data.split(":")[2])
     with Session(_engine) as db:
         d = db.get(ShortDomain, did)
-        reg_tok = decrypt_password(d.registrar_token_enc or "")
-        domain, ns1, ns2 = d.domain, d.ns1, d.ns2
+        reg_tok = _registrar_key(d)
+        reg = d.registrar or "namesilo"
+        domain, ns1, ns2 = (d.zone_name or d.domain), d.ns1, d.ns2
+    name = _REG_RU.get(reg, reg)
     if not reg_tok:
-        await cq.answer("Нет токена регистратора", show_alert=True)
+        await cq.answer(f"Нет ключа {name} (OTHER → 🔑 Ключи)", show_alert=True)
         return
-    await cq.answer("Меняю NS в NameSilo…")
-    from bot.services import namesilo as ns
+    await cq.answer(f"Меняю NS в {name}…")
+    if reg == "dynadot":
+        from bot.services import dynadot as api
+    else:
+        from bot.services import namesilo as api
     try:
-        detail = await ns.change_nameservers(reg_tok, domain, [ns1, ns2])
+        detail = await api.change_nameservers(reg_tok, domain, [ns1, ns2])
     except Exception as e:
-        await cq.message.answer(f"🔴 NameSilo: <code>{_esc(str(e)[:200])}</code>\n"
+        await cq.message.answer(f"🔴 {name}: <code>{_esc(str(e)[:200])}</code>\n"
                                 "Пропишите NS вручную у регистратора.")
         return
     await cq.message.answer(
-        f"✅ NS отправлены в NameSilo: <code>{_esc(str(detail)[:120])}</code>\n"
+        f"✅ NS отправлены в {name}: <code>{_esc(str(detail)[:120])}</code>\n"
         "Распространение — минуты-часы. Потом жмите «Проверить NS»."
     )
     await _show_card(cq, did)
@@ -374,7 +386,7 @@ async def sdom_checkns(cq: CallbackQuery):
     did = int(cq.data.split(":")[2])
     with Session(_engine) as db:
         d = db.get(ShortDomain, did)
-        token = decrypt_password(d.cf_token_enc or "")
+        token = _cf_token(d)
         zone_id, origin_ip, domain = d.cf_zone_id, d.origin_ip, d.domain
     await cq.answer("Проверяю…")
     try:
@@ -421,7 +433,7 @@ async def _do_provision(did: int) -> tuple[bool, list[str], str]:
     with Session(_engine) as db:
         drow = db.get(ShortDomain, did)
         node = db.get(Node, drow.node_id) if drow and drow.node_id else None
-        token = decrypt_password(drow.cf_token_enc or "")
+        token = _cf_token(drow)
         secret = decrypt_password(drow.secret_enc or "")
         drow.status = "provisioning"; drow.last_error = None
         db.add(drow); db.commit(); db.refresh(drow)
@@ -492,7 +504,7 @@ async def sdom_setnode(cq: CallbackQuery):
     with Session(_engine) as db:
         d = db.get(ShortDomain, did)
         node = db.get(Node, nid)
-        token = decrypt_password(d.cf_token_enc or "")
+        token = _cf_token(d)
         zone_id, domain = d.cf_zone_id, d.domain
         newip = node.ip if node else None
     if not newip:

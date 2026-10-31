@@ -10,8 +10,7 @@
 127.0.0.1:API_PORT, доступ только с IP Cloudflare (API доверяет CF-Connecting-IP — напрямую в обход
 CF ходить нельзя). Порт 80 → редирект на https.
 
-Токены: env CF_TOKEN / NAMESILO_KEY, иначе берутся из последнего short-домена в базе бота
-(🔗 SHORT → Личные домены). Без NAMESILO_KEY NS надо сменить у регистратора руками (скрипт их покажет).
+Токены: env CF_TOKEN / NAMESILO_KEY, иначе из бота: OTHER → 🔑 Ключи (или последний short-домен). Без NAMESILO_KEY NS надо сменить у регистратора руками (скрипт их покажет).
 """
 import argparse
 import asyncio
@@ -45,11 +44,12 @@ def tokens_from_db() -> tuple[str, str]:
         from common.db import get_engine
         from common.models.short_domain import ShortDomain
         from common.security import decrypt_password
+        from bot.services import keys  # общие ключи (OTHER → 🔑 Ключи) — в приоритете
         with Session(get_engine()) as db:
             rows = db.exec(select(ShortDomain).order_by(ShortDomain.id.desc())).all()
-        cf_tok = next((decrypt_password(d.cf_token_enc) for d in rows if d.cf_token_enc), "")
-        ns_key = next((decrypt_password(d.registrar_token_enc) for d in rows
-                       if d.registrar_token_enc and (d.registrar or "") == "namesilo"), "")
+        cf_tok = keys.get("cf") or next((decrypt_password(d.cf_token_enc) for d in rows if d.cf_token_enc), "")
+        ns_key = keys.get("namesilo") or next((decrypt_password(d.registrar_token_enc) for d in rows
+                                              if d.registrar_token_enc and (d.registrar or "") == "namesilo"), "")
         return cf_tok, ns_key
     except Exception as e:
         print(f"   (токены из базы не прочитаны: {e})")
