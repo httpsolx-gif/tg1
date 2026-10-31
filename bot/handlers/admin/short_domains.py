@@ -93,7 +93,7 @@ def _short_status(status: str) -> str:
 
 
 # ======================= карточка домена =======================
-def _card(did: int):
+def _card(did: int, note: str | None = None):
     with Session(_engine) as db:
         d = db.get(ShortDomain, did)
         node = db.get(Node, d.node_id) if d and d.node_id else None
@@ -125,19 +125,30 @@ def _card(did: int):
         rows.append(extra)
     rows.append([_btn("🔁 Обновить", f"sdom:open:{did}"), _btn("🗑 Удалить", f"sdom:del:{did}")])
     rows.append([_btn("⬅️ Назад", "sdom:list")])
+    if note:
+        lines.append("\n" + note)
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _show_card(cq: CallbackQuery, did: int, note: str | None = None):
-    text, kb = _card(did)
+    """Перерисовать карточку НА МЕСТЕ (результат действия — строкой note внизу), без новых сообщений."""
+    text, kb = _card(did, note)
     if text is None:
-        await cq.answer("Домен не найден", show_alert=True)
+        await _answer(cq, "Домен не найден", alert=True)
         return
     try:
         await cq.message.edit_text(text, reply_markup=kb)
+    except Exception as e:
+        if "not modified" not in str(e):  # то же самое — ничего не шлём (раньше тут дублилась карточка)
+            await cq.message.answer(text, reply_markup=kb)
+    await _answer(cq)
+
+
+async def _answer(cq: CallbackQuery, text: str | None = None, alert: bool = False) -> None:
+    try:
+        await cq.answer(text, show_alert=alert)
     except Exception:
-        await cq.message.answer(text, reply_markup=kb)
-    await cq.answer(note or None)
+        pass  # уже отвечен — не страшно
 
 
 # ======================= список доменов =======================
@@ -371,7 +382,7 @@ async def sdom_autons(cq: CallbackQuery):
     if not reg_tok:
         await cq.answer(f"Нет ключа {name} (OTHER → 🔑 Ключи)", show_alert=True)
         return
-    await cq.answer(f"Меняю NS в {name}…")
+    await _show_card(cq, did, f"⏳ Меняю NS в {name}…")
     if reg == "dynadot":
         from bot.services import dynadot as api
     else:
@@ -379,14 +390,9 @@ async def sdom_autons(cq: CallbackQuery):
     try:
         detail = await api.change_nameservers(reg_tok, domain, [ns1, ns2])
     except Exception as e:
-        await cq.message.answer(f"🔴 {name}: <code>{_esc(str(e)[:200])}</code>\n"
-                                "Пропишите NS вручную у регистратора.")
+        await _show_card(cq, did, f"🔴 {name}: <code>{_esc(str(e)[:160])}</code> — пропишите NS вручную")
         return
-    await cq.message.answer(
-        f"✅ NS отправлены в {name}: <code>{_esc(str(detail)[:120])}</code>\n"
-        "Распространение — минуты-часы. Потом жмите «Проверить NS»."
-    )
-    await _show_card(cq, did)
+    await _show_card(cq, did, f"✅ NS отправлены в {name}. Через минуты-часы — «Проверить NS».")
 
 
 # ======================= проверка NS / активация (фаза A финал) =======================
@@ -400,18 +406,15 @@ async def sdom_checkns(cq: CallbackQuery):
         d = db.get(ShortDomain, did)
         token = _cf_token(d)
         zone_id, origin_ip, domain = d.cf_zone_id, d.origin_ip, d.domain
-    await cq.answer("Проверяю…")
+    await _show_card(cq, did, "⏳ Проверяю NS…")
     try:
         await cf.activation_check(token, zone_id)
         st = await cf.zone_status(token, zone_id)
     except Exception as e:
-        await cq.message.answer(f"🔴 CF: <code>{_esc(str(e)[:200])}</code>")
+        await _show_card(cq, did, f"🔴 CF: <code>{_esc(str(e)[:160])}</code>")
         return
     if st != "active":
-        await cq.message.answer(
-            f"⏳ Зона ещё <b>{_esc(st)}</b> — NS не прописались. "
-            "Проверьте у регистратора NS и попробуйте позже."
-        )
+        await _show_card(cq, did, f"⏳ NS ещё не прописались ({_esc(st)}) — проверьте позже.")
         return
     # active → SSL Full + Always HTTPS + ПРОКСИРОВАННАЯ A-запись (оранжевое облако)
     try:
@@ -424,7 +427,7 @@ async def sdom_checkns(cq: CallbackQuery):
             d = db.get(ShortDomain, did)
             d.status, d.last_error = "error", str(e)[:250]
             db.add(d); db.commit()
-        await _show_card(cq, did, "Ошибка CF")
+        await _show_card(cq, did)
         return
     with Session(_engine) as db:
         d = db.get(ShortDomain, did)
@@ -433,13 +436,8 @@ async def sdom_checkns(cq: CallbackQuery):
         d.last_error = None
         d.activated_at = sc.now_iso()
         db.add(d); db.commit()
-    leak_note = ("\n\n⚠️ В зоне были записи, светившие IP origin — исправлено:\n"
-                 + "\n".join(f"• {_esc(x)}" for x in leaks)) if leaks else ""
-    await cq.message.answer(
-        "✅ Зона <b>active</b>, SSL=Full, A-запись создана <b>проксированной</b> (IP origin скрыт). "
-        "Теперь можно настроить сервер." + leak_note
-    )
-    await _show_card(cq, did)
+    leak_note = ("\n⚠️ Записи со светившимся IP исправлены: " + _esc(", ".join(leaks))) if leaks else ""
+    await _show_card(cq, did, "✅ NS на месте — жмите «Настроить сервер»." + leak_note)
 
 
 # ======================= провижн origin (фаза B) =======================
@@ -492,13 +490,9 @@ async def sdom_provision(cq: CallbackQuery):
         await cq.answer("Нет доступа", show_alert=True)
         return
     did = int(cq.data.split(":")[2])
-    await cq.answer("Настраиваю сервер…")
-    await cq.message.answer("⏳ Настраиваю origin по SSH (ключ+CSR → origin-cert → сервис → фаервол → проверка)…")
+    await _show_card(cq, did, "⏳ Настраиваю сервер…")
     ok, logs, err = await _do_provision(did, cq.bot)
-    report = "\n".join(logs) if logs else "(пусто)"
-    head = "✅ Готово — домен поднят." if ok else f"🔴 Провижн прервался: <code>{_esc(err[:200])}</code>"
-    await cq.message.answer(f"{head}\n\n<b>Шаги:</b>\n{_esc(report)}")
-    await _show_card(cq, did)
+    await _show_card(cq, did, None if ok else f"🔴 <code>{_esc(err[:160])}</code>")
 
 
 # ======================= перенос на другую ноду / переразвёртывание =======================
@@ -550,13 +544,10 @@ async def sdom_setnode(cq: CallbackQuery):
         d = db.get(ShortDomain, did)
         d.node_id = nid; d.origin_ip = newip; d.cf_record_id = rid
         db.add(d); db.commit()
-    await cq.message.answer(f"⏳ A-запись → {newip}. Разворачиваю сервис на новой ноде…")
+    await _show_card(cq, did, "⏳ Разворачиваю на новой ноде…")
     # 2) провижн новой ноды
     ok, logs, err = await _do_provision(did, cq.bot)
-    report = "\n".join(logs) if logs else "(пусто)"
-    head = "✅ Перенесено — домен на новой ноде." if ok else f"🔴 Провижн прервался: <code>{_esc(err[:200])}</code>"
-    await cq.message.answer(f"{head}\n\n<b>Шаги:</b>\n{_esc(report)}")
-    await _show_card(cq, did)
+    await _show_card(cq, did, "✅ Перенесено." if ok else f"🔴 <code>{_esc(err[:160])}</code>")
 
 
 # ======================= тест редиректа через публичный CF =======================
