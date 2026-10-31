@@ -139,10 +139,9 @@ async def sdom_list(cq: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "sdom:back")
 async def sdom_back(cq: CallbackQuery, state: FSMContext):
-    # сокращалки живут в 🧩 SRVS → «Назад» туда
     await state.clear()
-    from bot.handlers.admin.rubrics import srv_root
-    await srv_root(cq, state)
+    from bot.handlers.admin.index import back_to_admin
+    await back_to_admin(cq)
 
 
 @router.callback_query(F.data.startswith("sdom:open:"))
