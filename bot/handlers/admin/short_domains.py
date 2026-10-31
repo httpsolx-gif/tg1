@@ -112,28 +112,37 @@ async def _show_card(cq: CallbackQuery, did: int, note: str | None = None):
 
 
 # ======================= список доменов =======================
-def _list_kb() -> InlineKeyboardMarkup:
+# откуда открыли список: id области (⚙️ SHORT на карточке) → «Назад» на карточку; 0 = из раздела SHORT
+_ret_scope: dict[int, int] = {}
+
+
+def _list_kb(uid: int = 0) -> InlineKeyboardMarkup:
     with Session(_engine) as db:
         doms = db.exec(select(ShortDomain).order_by(ShortDomain.id)).all()
     rows = []
     for d in doms:
         mark = "✅" if d.status == "ready" else ("⚠️" if d.status == "error" else "⏳")
         rows.append([_btn(f"{mark} {d.domain} — {_STATUS_RU.get(d.status, d.status)}", f"sdom:open:{d.id}")])
+    sid = _ret_scope.get(uid, 0)
     rows.append([_btn("➕ Добавить свой домен", "sdom:add:0")])
-    rows.append([_btn("⬅️ Назад", "sdom:back")])
+    rows.append([_btn("⬅️ Назад", f"sco:card:{sid}" if sid else "sdom:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @router.callback_query(F.data == "sdom:list")
+@router.callback_query(F.data.startswith("sdom:list:"))
 async def sdom_list(cq: CallbackQuery, state: FSMContext):
     if not _admin(cq.from_user.id):
         await cq.answer("Нет доступа", show_alert=True)
         return
     await state.clear()
+    uid = cq.from_user.id
+    if cq.data.startswith("sdom:list:"):  # явный вход: с карточки (id области) или из раздела SHORT (0)
+        _ret_scope[uid] = int(cq.data.split(":")[2])
     try:
-        await cq.message.edit_text("🌐 Личные short-домены:", reply_markup=_list_kb())
+        await cq.message.edit_text("🌐 Личные short-домены:", reply_markup=_list_kb(uid))
     except Exception:
-        await cq.message.answer("🌐 Личные short-домены:", reply_markup=_list_kb())
+        await cq.message.answer("🌐 Личные short-домены:", reply_markup=_list_kb(uid))
     await cq.answer()
 
 
@@ -280,7 +289,7 @@ async def sdom_pick_node(cq: CallbackQuery, state: FSMContext):
         zone_id, ns = await cf.create_zone(token, zone)
     except Exception as e:
         await cq.message.answer(f"🔴 Не удалось создать зону: <code>{_esc(str(e)[:250])}</code>",
-                                reply_markup=_list_kb())
+                                reply_markup=_list_kb(cq.from_user.id))
         await cq.answer()
         return
 
@@ -597,5 +606,5 @@ async def sdom_del_yes(cq: CallbackQuery):
             cfg.short, cfg.short_at = None, None
             db.add(cfg)
         db.commit()
-    await cq.message.edit_text("🌐 Личные short-домены:", reply_markup=_list_kb())
+    await cq.message.edit_text("🌐 Личные short-домены:", reply_markup=_list_kb(cq.from_user.id))
     await cq.answer("Удалён")

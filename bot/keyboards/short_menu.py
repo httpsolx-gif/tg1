@@ -25,7 +25,7 @@ def _chunk(items: List[InlineKeyboardButton], size: int) -> List[List[InlineKeyb
 def kb_short_root() -> InlineKeyboardMarkup:
     """Корень раздела Short. «Назад» выходит в админку."""
     return _mk([
-        [_btn("🌐 Личные домены", "sdom:list")],
+        [_btn("🌐 Личные домены", "sdom:list:0")],
         [_btn("⚙️ Settings", "short:settings")],
         [_btn("🧹 Clear", "short:clear")],
         [_btn("⬅️ Назад", "admin:back")],
