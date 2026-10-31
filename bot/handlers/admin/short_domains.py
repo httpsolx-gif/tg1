@@ -443,10 +443,12 @@ async def sdom_checkns(cq: CallbackQuery):
 
 
 # ======================= провижн origin (фаза B) =======================
-async def _do_provision(did: int) -> tuple[bool, list[str], str]:
-    """Загрузить домен+ноду, выполнить provision, записать статус/cert. → (ok, logs, err)."""
+async def _do_provision(did: int, bot=None) -> tuple[bool, list[str], str]:
+    """Загрузить домен+ноду, выполнить provision, записать статус/cert. → (ok, logs, err).
+    bot — чтобы прислать админам «Домен X work ✅», когда домен впервые стал Work."""
     with Session(_engine) as db:
         drow = db.get(ShortDomain, did)
+        was_ready = drow.status == "ready"
         node = db.get(Node, drow.node_id) if drow and drow.node_id else None
         token = _cf_token(drow)
         secret = decrypt_password(drow.secret_enc or "")
@@ -470,7 +472,18 @@ async def _do_provision(did: int) -> tuple[bool, list[str], str]:
         else:
             d.status = "error"; d.last_error = err[:250]
         db.add(d); db.commit()
+        domain = d.domain
+    if ok and not was_ready and bot is not None:
+        await _notify_admins(bot, f"Домен <b>{_esc(domain)}</b> work ✅")
     return ok, logs, err
+
+
+async def _notify_admins(bot, text: str) -> None:
+    for uid in settings.admin_ids_set:
+        try:
+            await bot.send_message(uid, text)
+        except Exception as e:
+            log.warning("notify admin %s: %s", uid, e)
 
 
 @router.callback_query(F.data.startswith("sdom:provision:"))
@@ -481,7 +494,7 @@ async def sdom_provision(cq: CallbackQuery):
     did = int(cq.data.split(":")[2])
     await cq.answer("Настраиваю сервер…")
     await cq.message.answer("⏳ Настраиваю origin по SSH (ключ+CSR → origin-cert → сервис → фаервол → проверка)…")
-    ok, logs, err = await _do_provision(did)
+    ok, logs, err = await _do_provision(did, cq.bot)
     report = "\n".join(logs) if logs else "(пусто)"
     head = "✅ Готово — домен поднят." if ok else f"🔴 Провижн прервался: <code>{_esc(err[:200])}</code>"
     await cq.message.answer(f"{head}\n\n<b>Шаги:</b>\n{_esc(report)}")
@@ -539,7 +552,7 @@ async def sdom_setnode(cq: CallbackQuery):
         db.add(d); db.commit()
     await cq.message.answer(f"⏳ A-запись → {newip}. Разворачиваю сервис на новой ноде…")
     # 2) провижн новой ноды
-    ok, logs, err = await _do_provision(did)
+    ok, logs, err = await _do_provision(did, cq.bot)
     report = "\n".join(logs) if logs else "(пусто)"
     head = "✅ Перенесено — домен на новой ноде." if ok else f"🔴 Провижн прервался: <code>{_esc(err[:200])}</code>"
     await cq.message.answer(f"{head}\n\n<b>Шаги:</b>\n{_esc(report)}")
