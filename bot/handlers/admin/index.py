@@ -141,7 +141,7 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
         return
 
     # заглушки — просто текст + кнопка назад в админку
-    stubs = {}
+    stubs = {"other": "📦 <b>OTHER</b>\n\nПока пусто."}
     text = stubs.get(sec, "Раздел не найден.")
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")]])
@@ -167,6 +167,14 @@ async def admin_short(m: Message):
         return
     from bot.keyboards.short_menu import kb_short_root
     await m.answer("🔗 Short menu", reply_markup=kb_short_root())
+
+@router.message(F.text.in_({"📦 OTHER", "OTHER"}))
+async def admin_other(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")]])
+    await m.answer("📦 <b>OTHER</b>\n\nПока пусто.", reply_markup=kb)
 
 @router.message(F.text.in_({"🧩 SRVS", "SRVS"}))
 async def admin_srvs(m: Message):

@@ -1,17 +1,18 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 ADMIN_BUTTONS = [
-    ["📧 SMTP",  "🔗 SHORT", "🧩 SRVS",  "📊 STATS"],
-    ["👥 USERS", "🛡 API",   "🧪 TEST",  "🚨 ALERT"],
-    ["🖥 NODES", "💾 BACKUP"],
+    ["🧩 SRVS",  "📊 STATS", "👥 USERS", "🛡 API"],
+    ["🧪 TEST",  "🚨 ALERT", "🖥 NODES", "💾 BACKUP"],
+    ["📦 OTHER"],
 ]
 
 # Разделы для ИНЛАЙН-меню. Убраны из меню: MAIL, TEMPL (в рубрики), AWS (внутрь NODES),
-# SPAM (внутрь TEST), BC (внутрь ALERT).
+# SPAM (внутрь TEST), BC (внутрь ALERT), SMTP и SHORT (п.82: вместо них 📦 OTHER, пока пусто;
+# хендлеры smtp/short живы — вернуть в OTHER, когда понадобятся).
 ADMIN_SECTIONS = [
-    ("📧 SMTP", "smtp"), ("🔗 SHORT", "short"), ("🧩 SRVS", "srvs"), ("📊 STATS", "stats"),
-    ("👥 USERS", "users"), ("🛡 API", "api"), ("🧪 TEST", "test"), ("🚨 ALERT", "alert"),
-    ("🖥 NODES", "nodes"), ("💾 BACKUP", "backup"),
+    ("🧩 SRVS", "srvs"), ("📊 STATS", "stats"), ("👥 USERS", "users"), ("🛡 API", "api"),
+    ("🧪 TEST", "test"), ("🚨 ALERT", "alert"), ("🖥 NODES", "nodes"), ("💾 BACKUP", "backup"),
+    ("📦 OTHER", "other"),
 ]
 
 
