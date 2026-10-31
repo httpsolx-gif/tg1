@@ -19,7 +19,7 @@ log = logging.getLogger("bot")
 
 # Тексты кнопок нижнего меню — их нажатие в режиме ввода (SMTP/ноды) означает «выйти».
 from bot.keyboards.icons import strip_lead_emoji as _strip
-MENU_TEXTS = {"⬅️ Назад", "🛠 Админка", "📤 Отправить письмо", "📋 Меню"}
+MENU_TEXTS = {"⬅️ Назад", "🛠 Админка", "📤 Отправить письмо", "📨 Отправить письмо", "📋 Меню"}
 MENU_TEXTS |= {txt for row in ADMIN_BUTTONS for txt in row}
 MENU_TEXTS |= {_strip(t) for t in set(MENU_TEXTS)}  # варианты без эмодзи (iconize reply-меню)
 

@@ -17,7 +17,7 @@ from bot.keyboards.icons import strip_lead_emoji as _strip
 # им пользуются и этот флоу, и API-воркер. Здесь остаётся только Telegram-UX.
 
 # тексты нижнего меню — выход из флоу
-_MENU_TEXTS = {"⬅️ Назад", "🛠 Админка", "📋 Меню"} | {t for row in ADMIN_BUTTONS for t in row}
+_MENU_TEXTS = {"⬅️ Назад", "🛠 Админка", "📋 Меню", "📨 Отправить письмо"} | {t for row in ADMIN_BUTTONS for t in row}
 _MENU_TEXTS |= {_strip(t) for t in set(_MENU_TEXTS)}
 
 log = logging.getLogger("bot")
