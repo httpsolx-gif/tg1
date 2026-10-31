@@ -446,6 +446,7 @@ def kb_srvs_root() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗂 Рубрики", callback_data="rub:root")],
         [InlineKeyboardButton(text="🧩 Сервисы (шаблон/тайтл/имя)", callback_data="svc:root")],
+        [InlineKeyboardButton(text="🔗 SHORT", callback_data="sdom:list")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="rub:back")],
     ])
 
