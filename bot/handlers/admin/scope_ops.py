@@ -94,8 +94,8 @@ def ops_rows(scope_id: int) -> List[List[InlineKeyboardButton]]:
     return [
         [_btn(f"🔁 Автосмена: {_auto_txt(cfg)}", f"sco:auto:{i}")],
         # слева SMTP, справа SHORT; выгрузка — в «Автосмене»;
-        # ➕ SHORT = личные short-домены (добавить/список), ⚙️ SHORT = какую сокращалку ставить области
-        [_btn("➕ SMTP", f"sco:up:{i}"), _btn("➕ SHORT", f"sdom:list:{i}")],
+        # ➕ SHORT = сразу ввод нового домена (привяжется к области), ⚙️ SHORT = какую сокращалку ставить
+        [_btn("➕ SMTP", f"sco:up:{i}"), _btn("➕ SHORT", f"sdom:add:{i}")],
         [_btn("⚙️ SMTP", f"sco:accs:{i}"), _btn("⚙️ SHORT", f"sco:sh:{i}")],
         [_btn("🗑 SMTP", f"sco:clr:{i}"), _btn("🗑 SHORT", f"sco:shdel:{i}")],
     ]
@@ -277,7 +277,6 @@ async def sco_short(cq: CallbackQuery):
         doms = db.exec(select(ShortDomain).where(ShortDomain.status == "ready").order_by(ShortDomain.id)).all()
     for d in doms:
         rows.append([_btn(f"🌐 {d.domain}", f"sco:shdom:{sid}:{d.id}")])
-    rows.append([_btn("➕ Свой домен", f"sdom:add:{sid}"), _btn("🌐 Мои домены", f"sdom:list:{sid}")])
     rows.append([_btn("🚫 Не сокращать", f"sco:shset:{sid}:off")])
     rows.append([_btn("⬅️ Назад", f"sco:card:{sid}")])
     await cq.message.edit_text("⚙️ SHORT для области — выберите сокращатель:",

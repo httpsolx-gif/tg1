@@ -173,6 +173,8 @@ async def sdom_add(cq: CallbackQuery, state: FSMContext):
         await cq.answer("Нет доступа", show_alert=True)
         return
     bind_sid = int(cq.data.split(":")[2])  # область, к которой привязать (0 = ниоткуда)
+    if bind_sid:  # с карточки области → «Отмена»/«Назад» из списка вернут на неё
+        _ret_scope[cq.from_user.id] = bind_sid
     await state.clear()
     await state.set_state(ShortDomainAdd.domain)
     await state.update_data(bind_sid=bind_sid)
