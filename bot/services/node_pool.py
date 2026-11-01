@@ -46,11 +46,20 @@ def _order(nodes: list[Node]) -> list[Node]:
     return sorted(nodes, key=lambda n: (is_down(n.id), bool(n.is_backup), n.id))
 
 
-def send_nodes() -> list[Node]:
-    """Кандидаты для SMTP: активные ноды с ролью отправки."""
+def _active_send() -> list[Node]:
     with Session(_engine) as db:
         nodes = db.exec(select(Node).where(Node.is_active == True)).all()  # noqa: E712
-    return _order([n for n in nodes if n.has_role("send")])
+    return [n for n in nodes if n.has_role("send")]
+
+
+def send_nodes() -> list[Node]:
+    """Кандидаты для SMTP: активные ноды отправки БЕЗ региона (ноды с регионом — только под SES, п.111)."""
+    return _order([n for n in _active_send() if not (n.region or "").strip()])
+
+
+def has_send_nodes() -> bool:
+    """Есть ли вообще активные ноды отправки (любого региона)."""
+    return bool(_active_send())
 
 
 def region_nodes(region: str | None) -> list[Node]:
@@ -58,9 +67,7 @@ def region_nodes(region: str | None) -> list[Node]:
     reg = (region or "").strip().lower()
     if not reg:
         return []
-    with Session(_engine) as db:
-        nodes = db.exec(select(Node).where(Node.is_active == True)).all()  # noqa: E712
-    return _order([n for n in nodes if n.has_role("send") and (n.region or "").strip().lower() == reg])
+    return _order([n for n in _active_send() if (n.region or "").strip().lower() == reg])
 
 
 def ses_nodes(aws) -> list[Node]:

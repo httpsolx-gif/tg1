@@ -34,7 +34,7 @@ from bot.services.templates import render_template, default_template, resolve_te
 from bot.services.short_client import shorten_url
 from bot.services import mailer as mailer_svc
 from bot.services.node_runner import send_via_node, send_ses_via_node
-from bot.services.node_pool import send_nodes, ses_nodes, send_with_failover
+from bot.services.node_pool import send_nodes, has_send_nodes, ses_nodes, send_with_failover
 
 log = logging.getLogger("bot")
 _engine = get_engine()
@@ -330,6 +330,10 @@ async def _send_payload(
             else:
                 # все ноды лежат — НЕ шлём с IP бота, отдаём ошибку
                 via = "SMTP — все ноды недоступны"
+        elif has_send_nodes():
+            # ноды есть, но все с регионом (они только под SES) — с IP бота не шлём
+            via = "SMTP — нет ноды без региона"
+            ok, info = False, "нет активной ноды отправки без региона (ноды с регионом — только для SES своего региона)"
         else:
             via = "SMTP локально (активных нод нет)"
             ok, info = await mailer_svc.send_via_account(smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
