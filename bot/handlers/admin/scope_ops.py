@@ -434,7 +434,7 @@ async def sco_upload(cq: CallbackQuery, state: FSMContext):
         "📥 Пришлите строки или .txt (по одной на строку, можно вперемешку):\n"
         "• SMTP: <code>host:port:user:pass</code> (user = email) или <code>host:port:user:email:pass</code>\n"
         "• AWS SES: <code>region:accesskey:secretkey:emailfrom</code> (напр. eu-west-1:…)\n"
-        "Новые SMTP проверяются тестовой отправкой, AWS — запросом квоты; уже известные просто добавляются в базу.",
+        "После загрузки спрошу: проверять (SMTP — тестовой отправкой, AWS — запросом квоты) или добавить без проверки.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("⬅️ Отмена", f"sco:card:{sid}")]]),
     )
     await cq.answer()
@@ -465,7 +465,7 @@ def parse_smtp_line(ln: str) -> tuple[str, int, str, str, str]:
         raise
 
 
-async def _ingest_aws(db: Session, scope_id: int, ln: str) -> bool:
+async def _ingest_aws(db: Session, scope_id: int, ln: str, check: bool = True) -> bool:
     from bot.services.aws_ses import parse_aws_line, check_aws
     from bot.services.node_pool import region_nodes
     region, access, secret, email = parse_aws_line(ln)
@@ -478,9 +478,10 @@ async def _ingest_aws(db: Session, scope_id: int, ln: str) -> bool:
     ).first()
     if acc is None:
         acc = AwsAccount(region=region, access_key=access, secret_key_enc=encrypt_password(secret), email_from=email)
-        ok, info = await check_aws(acc)
-        if not ok:
-            raise ValueError(f"SES: {info[:150]}")
+        if check:
+            ok, info = await check_aws(acc)
+            if not ok:
+                raise ValueError(f"SES: {info[:150]}")
         db.add(acc)
         db.commit()
         db.refresh(acc)
@@ -490,7 +491,7 @@ async def _ingest_aws(db: Session, scope_id: int, ln: str) -> bool:
     return True
 
 
-async def _ingest_smtp(db: Session, scope_id: int, ln: str) -> bool:
+async def _ingest_smtp(db: Session, scope_id: int, ln: str, check: bool = True) -> bool:
     from bot.services.mailer import probe_smtp
     host, port, user, email, password = parse_smtp_line(ln)
     acc = db.exec(
@@ -500,9 +501,10 @@ async def _ingest_smtp(db: Session, scope_id: int, ln: str) -> bool:
         )
     ).first()
     if acc is None:
-        probe = await probe_smtp(host=host, port=port, login=user, sender_email=email, password=password)
-        if not probe.ok:
-            raise ValueError(probe.error or probe.smtp_response or "probe failed")
+        if check:
+            probe = await probe_smtp(host=host, port=port, login=user, sender_email=email, password=password)
+            if not probe.ok:
+                raise ValueError(probe.error or probe.smtp_response or "probe failed")
         # kind='scope': такие SMTP не попадают в общий фолбэк групп gmail/main
         acc = SmtpAccount(kind="scope", host=host, port=port, login=user, email=email,
                           password_enc=encrypt_password(password), pool="scope")
@@ -515,14 +517,15 @@ async def _ingest_smtp(db: Session, scope_id: int, ln: str) -> bool:
     return True
 
 
-async def ingest(scope_id: int, lines: list[str]) -> tuple[int, list[str]]:
-    """Строки SMTP и AWS вперемешку → в базу области. AWS узнаётся по региону в начале (eu-west-1:…)."""
+async def ingest(scope_id: int, lines: list[str], check: bool = True) -> tuple[int, list[str]]:
+    """Строки SMTP и AWS вперемешку → в базу области. AWS узнаётся по региону в начале (eu-west-1:…).
+    check=False — без логина в SMTP/SES (формат и нода региона для AWS проверяются всё равно)."""
     added, errors = 0, []
     with Session(_engine) as db:
         for ln in lines:
             is_aws = bool(_REGION.match(ln.split(":", 1)[0].strip()))
             try:
-                if await (_ingest_aws if is_aws else _ingest_smtp)(db, scope_id, ln):
+                if await (_ingest_aws if is_aws else _ingest_smtp)(db, scope_id, ln, check):
                     db.commit()  # сразу: rollback на следующей битой строке не должен её откатить
                     added += 1
             except Exception as e:
@@ -537,19 +540,52 @@ async def ingest(scope_id: int, lines: list[str]) -> tuple[int, list[str]]:
 
 
 async def _after_ingest(m: Message, state: FSMContext, lines: list[str]) -> None:
+    """Строки получены → спросить: проверять каждую (логин в SMTP/SES) или добавить сразу."""
     sid = (await state.get_data()).get("scope_id")
-    await state.clear()
     if not sid:
+        await state.clear()
         await m.answer("Что-то пошло не так, откройте область заново.")
         return
-    await m.answer(f"⏳ Проверяю {len(lines)} шт…")
-    added, errors = await ingest(sid, lines)
-    msg = f"✅ Добавлено в базу: {added} из {len(lines)}"
+    if not lines:
+        await m.answer("Пусто — пришлите строки или .txt.")
+        return
+    await state.update_data(upload_lines=lines)
+    await m.answer(
+        f"📥 Получено строк: {len(lines)}\n\n"
+        "🧪 <b>С проверкой</b> — вхожу в каждый SMTP/SES, нерабочие не добавляю (дольше).\n"
+        "⚡ <b>Без проверки</b> — добавляю сразу, проверяется только формат.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🧪 С проверкой", callback_data="sco:upchk:1"),
+             InlineKeyboardButton(text="⚡ Без проверки", callback_data="sco:upchk:0")],
+            [InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"sco:card:{sid}")],
+        ]))
+
+
+@router.callback_query(ScopeInput.smtp, F.data.startswith("sco:upchk:"))
+async def sco_upload_go(cq: CallbackQuery, state: FSMContext):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    data = await state.get_data()
+    sid, lines = data.get("scope_id"), data.get("upload_lines") or []
+    await state.clear()
+    if not sid or not lines:
+        await cq.answer("Загрузка устарела — пришлите заново", show_alert=True)
+        return
+    check = cq.data.endswith(":1")
+    await cq.answer()
+    try:
+        await cq.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await cq.message.answer(f"⏳ Проверяю {len(lines)} шт…" if check else f"⏳ Добавляю {len(lines)} шт без проверки…")
+    added, errors = await ingest(sid, lines, check)
+    msg = f"✅ Добавлено в базу: {added} из {len(lines)}" + ("" if check else " (без проверки)")
     if errors:
         msg += "\n\n❌ Ошибки:\n" + "\n".join(f"<code>{_esc(e)}</code>" for e in errors[:15])
     text, kb = render(sid)
-    await m.answer(msg)
-    await m.answer(text, reply_markup=kb)
+    await cq.message.answer(msg)
+    await cq.message.answer(text, reply_markup=kb)
 
 
 @router.message(ScopeInput.smtp, F.text)
