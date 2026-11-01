@@ -43,9 +43,13 @@ _MX_PATTERNS = [
     ("protection.outlook.com", "microsoft"), ("outlook.com", "microsoft"),
     ("office365", "microsoft"), ("hotmail.com", "microsoft"), ("microsoft", "microsoft"),
     ("yahoodns", "yahoo"), ("yahoo.com", "yahoo"),
-    ("kundenserver", "unitedinternet"), ("1und1", "unitedinternet"),
-    ("einsundeins", "unitedinternet"), ("gmx.net", "unitedinternet"),
-    ("web.de", "unitedinternet"), ("united-internet", "unitedinternet"), ("ui-dns", "unitedinternet"),
+    # emig.* — приём потребительской почты GMX/WEB.DE (fun-домены gmx-topmail, wolke7…);
+    # просто kundenserver/1und1 — хостинг IONOS для своих доменов (корп → other)
+    ("emig.", "unitedinternet"), ("gmx.net", "unitedinternet"), ("web.de", "unitedinternet"),
+    ("kundenserver", "ionos"), ("1und1", "ionos"), ("einsundeins", "ionos"),
+    ("united-internet", "ionos"), ("ui-dns", "ionos"),
+    ("freenet.de", "localfree"), ("vodafonemail", "localfree"), ("t-online.de", "localfree"),
+    ("dg-sys.net", "localfree"), ("simplelogin", "localfree"), ("snafu.de", "localfree"),
     ("mail.ru", "mailru"),
     ("yandex", "yandex"),
     ("protonmail", "proton"), ("proton.me", "proton"),
@@ -67,7 +71,9 @@ PROVIDER_MAILBOX = {
 #    малоизвестные локальные бесплатные почты → main;
 #  • свой/корп домен — по MX: только крупные (Google/Microsoft/Apple/Yahoo) → их рубрика,
 #    остальной хостинг (IONOS, Zoho, свой сервер, шлюзы…) → None → other.
-PROVIDER_RUBRIC = {"google": "gmail", "microsoft": "hotmail", "apple": "icloud", "yahoo": "yahoo"}
+PROVIDER_RUBRIC = {"google": "gmail", "microsoft": "hotmail", "apple": "icloud", "yahoo": "yahoo",
+                   # по MX видно, что это потребительский почтовик (fun-домены GMX, freenet, vodafone…)
+                   "unitedinternet": "main", "mailru": "main", "localfree": "main"}
 
 # метка домена → провайдер, для любого TLD (hotmail.fr, live.de, yahoo.co.jp, aol.de…)
 _LABEL_PROVIDER = {
@@ -79,26 +85,7 @@ _LABEL_PROVIDER = {
 }
 _EXACT_PROVIDER = {"me.com": "apple", "mac.com": "apple", "aol.com": "yahoo"}
 
-# малоизвестные/локальные бесплатные почты (публичные домены провайдеров) → main
-LOCAL_FREEMAIL = set("""
-web.de gmx.de gmx.net gmx.at gmx.ch gmx.com gmx.fr gmx.es gmx.it gmx.us mail.com email.com
-t-online.de magenta.de freenet.de arcor.de online.de email.de posteo.de posteo.net mailbox.org
-vodafone.de vodafonemail.de kabelmail.de unitybox.de ewe.net osnanet.de htp-tel.de mnet-online.de
-1und1.de onlinehome.de tutanota.com tutanota.de tuta.io proton.me protonmail.com protonmail.ch pm.me
-aon.at chello.at a1.net drei.at bluewin.ch sunrise.ch hispeed.ch gmail.ch
-wp.pl onet.pl onet.eu op.pl o2.pl interia.pl interia.eu poczta.fm tlen.pl vp.pl gazeta.pl buziaczek.pl
-seznam.cz email.cz centrum.cz atlas.cz post.cz volny.cz azet.sk zoznam.sk centrum.sk
-freemail.hu citromail.hu abv.bg mail.bg dir.bg yahoo.ro
-libero.it virgilio.it alice.it tiscali.it tim.it email.it fastwebnet.it
-orange.fr free.fr laposte.net sfr.fr wanadoo.fr neuf.fr bbox.fr numericable.fr
-telefonica.net terra.es ono.com sapo.pt
-ziggo.nl kpnmail.nl home.nl planet.nl hetnet.nl chello.nl xs4all.nl telenet.be skynet.be proximus.be
-mail.ru inbox.ru list.ru bk.ru internet.ru yandex.ru yandex.com ya.ru rambler.ru ukr.net i.ua meta.ua
-inbox.lv inbox.lt mail.ee
-btinternet.com sky.com virginmedia.com talktalk.net ntlworld.com blueyonder.co.uk
-comcast.net att.net sbcglobal.net cox.net charter.net earthlink.net
-zoho.com zohomail.com zohomail.eu gmx.co.uk mail.de
-""".split())
+from common.constants import LOCAL_FREEMAIL  # noqa: E402 (п.115/116)
 
 
 def public_provider(domain: str) -> str | None:

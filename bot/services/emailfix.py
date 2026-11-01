@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from common.constants import CANONICAL_EMAIL_DOMAINS, TYPO_DOMAIN_MAP
+from common.constants import CANONICAL_EMAIL_DOMAINS, LOCAL_FREEMAIL, TYPO_DOMAIN_MAP
 
 
 def _osa(a: str, b: str) -> int:
@@ -36,8 +36,8 @@ def fix_domain(domain: str) -> str:
     d = (domain or "").strip().lower().strip(".")
     if not d:
         return domain
-    if d in CANONICAL_EMAIL_DOMAINS:
-        return d
+    if d in CANONICAL_EMAIL_DOMAINS or d in LOCAL_FREEMAIL:
+        return d  # реальный почтовик (mail.com ≠ опечатка gmail.com, my.com ≠ me.com)
     if d in TYPO_DOMAIN_MAP:
         return TYPO_DOMAIN_MAP[d]
     best = None

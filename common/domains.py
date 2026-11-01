@@ -1,7 +1,7 @@
 """Матчинг домена получателя по списку токенов рубрики/почты.
 
 Токены можно задавать как КОРОТКО, так и полным доменом — в одном поле вперемешку:
-  - `gmx`      → ловит gmx.de, gmx.net, gmx.com, mail.gmx.de (метка домена)
+  - `gmx`      → ловит gmx.de, gmx.net, gmx.com, mail.gmx.de (имя домена перед зоной)
   - `web`      → web.de, web.com
   - `gmail`    → gmail.com  (НЕ googlemail — это другая метка, добавляй отдельно)
   - `gmx.de`   → gmx.de и поддомены (*.gmx.de)  (полный домен/суффикс)
@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 
 _SPLIT = re.compile(r"[\s,;]+")
+# вторые уровни двухчастных зон: yahoo.co.uk, mail.com.au, ne.jp…
+_SLD2 = {"co", "com", "net", "org", "ac", "gov", "edu", "ne", "or", "go"}
 
 
 def parse_tokens(s: str) -> list[str]:
@@ -28,8 +30,17 @@ def token_matches(token: str, dom: str) -> bool:
     if "." in token:
         # полный домен или суффикс: gmx.de ловит gmx.de и mail.gmx.de
         return dom == token or dom.endswith("." + token)
-    # короткий токен = любая метка домена: gmx → gmx.de/gmx.net, web → web.de
-    return token in dom.split(".")
+    # короткий токен = ИМЯ домена (метка прямо перед зоной): gmx → gmx.de/gmx.net/mail.gmx.de,
+    # web → web.de. Метка-поддомен или сама зона не считаются (п.116): mail ≠ mail.kleinanzeigen.de,
+    # online ≠ firma.online
+    labels = dom.split(".")
+    for i, lab in enumerate(labels):
+        if lab != token:
+            continue
+        rest = labels[i + 1:]
+        if len(rest) == 1 or (len(rest) == 2 and rest[0] in _SLD2):
+            return True
+    return False
 
 
 def domain_in(dom: str, tokens_str: str) -> bool:

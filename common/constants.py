@@ -293,3 +293,32 @@ MAILBOXES = [
 ]
 MAILBOX_NAME_BY_CODE = {code: name for code, name in MAILBOXES}
 MAILBOX_CODE_BY_NAME = {name: code for code, name in MAILBOXES}
+
+
+# малоизвестные/локальные бесплатные почты (публичные домены провайдеров) → main
+LOCAL_FREEMAIL = set("""
+web.de gmx.de gmx.net gmx.at gmx.ch gmx.com gmx.fr gmx.es gmx.it gmx.us mail.com email.com
+t-online.de magenta.de freenet.de arcor.de online.de email.de posteo.de posteo.net mailbox.org
+vodafone.de vodafonemail.de kabelmail.de unitybox.de ewe.net osnanet.de htp-tel.de mnet-online.de
+1und1.de onlinehome.de tutanota.com tutanota.de tuta.io proton.me protonmail.com protonmail.ch pm.me
+aon.at chello.at a1.net drei.at bluewin.ch sunrise.ch hispeed.ch gmail.ch
+wp.pl onet.pl onet.eu op.pl o2.pl interia.pl interia.eu poczta.fm tlen.pl vp.pl gazeta.pl buziaczek.pl
+seznam.cz email.cz centrum.cz atlas.cz post.cz volny.cz azet.sk zoznam.sk centrum.sk
+freemail.hu citromail.hu abv.bg mail.bg dir.bg yahoo.ro
+libero.it virgilio.it alice.it tiscali.it tim.it email.it fastwebnet.it
+orange.fr free.fr laposte.net sfr.fr wanadoo.fr neuf.fr bbox.fr numericable.fr
+telefonica.net terra.es ono.com sapo.pt
+ziggo.nl kpnmail.nl home.nl planet.nl hetnet.nl chello.nl xs4all.nl telenet.be skynet.be proximus.be
+mail.ru inbox.ru list.ru bk.ru internet.ru yandex.ru yandex.com ya.ru rambler.ru ukr.net i.ua meta.ua
+inbox.lv inbox.lt mail.ee
+btinternet.com sky.com virginmedia.com talktalk.net ntlworld.com blueyonder.co.uk
+comcast.net att.net sbcglobal.net cox.net charter.net earthlink.net
+zoho.com zohomail.com zohomail.eu gmx.co.uk mail.de
+netcologne.de o2online.de alice.de alice-dsl.de alice-dsl.net ok.de wtnet.de nexgo.de ish.de
+dg-email.de myquix.de teleos-web.de eclipso.de eclipso.eu dokom.net rz-online.de superkabel.de online.ms
+gelsennet.de snafu.de skymail.de firemail.de riseup.net pt.lu ik.me duck.com passmail.net my.com
+freenetmail.de freakmail.de bossmail.de justmail.de betrug.de leckmich.de
+gmx-topmail.de go4more.de wolke7.net abwesend.de
+berlin.de hamburg.de koeln.de muenster.de wolfsburg.de paderborn.com
+naver.com hanmail.net daum.net qq.com foxmail.com 163.com 126.com yeah.net sina.com sohu.com
+""".split())
