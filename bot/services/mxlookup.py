@@ -5,8 +5,9 @@
 Yahoo, United-Internet (web.de/gmx), Mail.ru, Yandex, Apple, Proton, Zoho.
 Результат кэшируется (память + таблица mx_cache), DNS дёргается один раз на домен.
 
-Маппинг провайдер → рубрика/почта: google→gmail, microsoft→hotmail, прочие
-известные → main; шлюзы (proofpoint/mimecast/…) и нераспознанное → None (→ other).
+Рубрика (п.115): публичные домены — рубрика провайдера (gmail/hotmail/icloud/yahoo),
+локальные бесплатные почты → main; свой/корп домен по MX — только Google/Microsoft/
+Apple/Yahoo → их рубрика, прочий хостинг, шлюзы и нераспознанное → None (→ other).
 Чистый модуль (sqlmodel + common + subprocess, без aiogram).
 """
 from __future__ import annotations
@@ -31,7 +32,8 @@ STATIC_DOMAIN_PROVIDER = {
     "web.de": "unitedinternet", "gmx.de": "unitedinternet", "gmx.net": "unitedinternet",
     "gmx.com": "unitedinternet", "t-online.de": "unitedinternet",
     "mail.ru": "mailru", "yandex.ru": "yandex",
-    "icloud.com": "apple", "me.com": "apple",
+    "icloud.com": "apple", "me.com": "apple", "mac.com": "apple",
+    "aol.com": "yahoo", "aol.de": "yahoo", "ymail.com": "yahoo",
     "proton.me": "proton", "protonmail.com": "proton",
 }
 
@@ -60,11 +62,54 @@ PROVIDER_MAILBOX = {
     "unitedinternet": "main", "mailru": "main", "yandex": "main",
     "apple": "main", "proton": "main", "zoho": "main",
 }
-PROVIDER_RUBRIC = {
-    "google": "gmail", "microsoft": "hotmail", "yahoo": "main",
-    "unitedinternet": "main", "mailru": "main", "yandex": "main",
-    "apple": "main", "proton": "main", "zoho": "main",
+# Рубрика по провайдеру (п.115):
+#  • публичный домен провайдера (gmail.com, aol.com, posteo.de…) → рубрика провайдера,
+#    малоизвестные локальные бесплатные почты → main;
+#  • свой/корп домен — по MX: только крупные (Google/Microsoft/Apple/Yahoo) → их рубрика,
+#    остальной хостинг (IONOS, Zoho, свой сервер, шлюзы…) → None → other.
+PROVIDER_RUBRIC = {"google": "gmail", "microsoft": "hotmail", "apple": "icloud", "yahoo": "yahoo"}
+
+# метка домена → провайдер, для любого TLD (hotmail.fr, live.de, yahoo.co.jp, aol.de…)
+_LABEL_PROVIDER = {
+    "gmail": "google", "googlemail": "google",
+    "hotmail": "microsoft", "outlook": "microsoft", "live": "microsoft", "msn": "microsoft",
+    "windowslive": "microsoft", "passport": "microsoft",
+    "yahoo": "yahoo", "ymail": "yahoo", "rocketmail": "yahoo", "aol": "yahoo", "aim": "yahoo",
+    "verizon": "yahoo", "icloud": "apple",
 }
+_EXACT_PROVIDER = {"me.com": "apple", "mac.com": "apple", "aol.com": "yahoo"}
+
+# малоизвестные/локальные бесплатные почты (публичные домены провайдеров) → main
+LOCAL_FREEMAIL = set("""
+web.de gmx.de gmx.net gmx.at gmx.ch gmx.com gmx.fr gmx.es gmx.it gmx.us mail.com email.com
+t-online.de magenta.de freenet.de arcor.de online.de email.de posteo.de posteo.net mailbox.org
+vodafone.de vodafonemail.de kabelmail.de unitybox.de ewe.net osnanet.de htp-tel.de mnet-online.de
+1und1.de onlinehome.de tutanota.com tutanota.de tuta.io proton.me protonmail.com protonmail.ch pm.me
+aon.at chello.at a1.net drei.at bluewin.ch sunrise.ch hispeed.ch gmail.ch
+wp.pl onet.pl onet.eu op.pl o2.pl interia.pl interia.eu poczta.fm tlen.pl vp.pl gazeta.pl buziaczek.pl
+seznam.cz email.cz centrum.cz atlas.cz post.cz volny.cz azet.sk zoznam.sk centrum.sk
+freemail.hu citromail.hu abv.bg mail.bg dir.bg yahoo.ro
+libero.it virgilio.it alice.it tiscali.it tim.it email.it fastwebnet.it
+orange.fr free.fr laposte.net sfr.fr wanadoo.fr neuf.fr bbox.fr numericable.fr
+telefonica.net terra.es ono.com sapo.pt
+ziggo.nl kpnmail.nl home.nl planet.nl hetnet.nl chello.nl xs4all.nl telenet.be skynet.be proximus.be
+mail.ru inbox.ru list.ru bk.ru internet.ru yandex.ru yandex.com ya.ru rambler.ru ukr.net i.ua meta.ua
+inbox.lv inbox.lt mail.ee
+btinternet.com sky.com virginmedia.com talktalk.net ntlworld.com blueyonder.co.uk
+comcast.net att.net sbcglobal.net cox.net charter.net earthlink.net
+zoho.com zohomail.com zohomail.eu gmx.co.uk mail.de
+""".split())
+
+
+def public_provider(domain: str) -> str | None:
+    """Публичный домен почтовика → провайдер ('local' — малоизвестные/локальные). None — свой/корп домен."""
+    dom = (domain or "").strip().lower().strip(".")
+    if dom in _EXACT_PROVIDER:
+        return _EXACT_PROVIDER[dom]
+    if dom in LOCAL_FREEMAIL:
+        return "local"
+    first = dom.split(".", 1)[0]
+    return _LABEL_PROVIDER.get(first)
 
 
 def _resolve_mx(domain: str) -> list[str] | None:
@@ -136,5 +181,9 @@ def mailbox_for_domain(domain: str) -> str | None:
 
 
 def rubric_name_for_domain(domain: str) -> str | None:
-    p = provider_for_domain(domain)
+    """Имя рубрики для домена получателя, не найденного в «Почтах» рубрик; None → other."""
+    pub = public_provider(domain)
+    if pub:
+        return PROVIDER_RUBRIC.get(pub, "main")
+    p = provider_for_domain(domain)  # свой домен — по MX
     return PROVIDER_RUBRIC.get(p) if p else None
