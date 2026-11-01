@@ -24,13 +24,14 @@ from sqlmodel import Session, select
 
 from common.config import settings
 from common.db import get_engine
+from common.models.appstate import AppState
 from common.models.node import Node
 from bot.services.node_runner import DEFAULT_SSH_PORT, NodeUnreachable, _run_on_node
 
 log = logging.getLogger("bot")
 _engine = get_engine()
 
-VERSION = "v1"
+VERSION = "v2"  # v2: белый список IP — все порты + разбан
 CONF_DIR = "/etc/nodefw"
 ROLLBACK_SEC = 120
 RETRY_SEC = 30 * 60  # после ошибки — повтор не чаще раза в 30 мин (кнопка — сразу)
@@ -44,13 +45,40 @@ _WRAP = ('if [ "$(id -u)" = 0 ]; then bash -s -- "${SSH_CLIENT%% *}"; '
          'else sudo -n bash -s -- "${SSH_CLIENT%% *}"; fi')
 
 
+TRUST_KEY = "nodefw:trust"  # AppState: белый список IP из бота (NODES → 🤍)
+
+
+def norm_ip(x: str) -> str | None:
+    try:
+        return str(ipaddress.ip_network(x.strip(), strict=False))
+    except ValueError:
+        return None
+
+
+def ui_trust() -> list[str]:
+    """Белый список, заданный в боте."""
+    with Session(_engine) as db:
+        row = db.get(AppState, TRUST_KEY)
+    return [x for x in (row.value or "").split() if norm_ip(x)] if row else []
+
+
+def set_ui_trust(ips: list[str]) -> None:
+    with Session(_engine) as db:
+        row = db.get(AppState, TRUST_KEY) or AppState(key=TRUST_KEY)
+        row.value = " ".join(sorted(set(ips)))
+        db.add(row)
+        db.commit()
+
+
 def _trust_ips() -> list[str]:
+    """Белый список = NODE_TRUST_IPS (.env) + список из бота: все порты открыты, fail2ban не банит."""
     out = []
-    for x in (settings.NODE_TRUST_IPS or "").replace(",", " ").split():
-        try:
-            out.append(str(ipaddress.ip_network(x, strict=False)))
-        except ValueError:
-            log.warning("NODE_TRUST_IPS: пропускаю %r", x)
+    for x in (settings.NODE_TRUST_IPS or "").replace(",", " ").split() + ui_trust():
+        net = norm_ip(x)
+        if net:
+            out.append(net)
+        else:
+            log.warning("белый список нод: пропускаю %r", x)
     return sorted(set(out))
 
 
@@ -66,7 +94,18 @@ def desired_sig(n: Node) -> str:
     return f"{VERSION}|ssh={_port(n)}|web={int(_web(n))}|trust={','.join(_trust_ips())}"
 
 
-def nft_ruleset(ssh_port: int, web: bool) -> str:
+def _trust_rules(trust: list[str]) -> str:
+    v4 = [t for t in trust if ":" not in t]
+    v6 = [t for t in trust if ":" in t]
+    out = ""
+    if v4:
+        out += f"        ip saddr {{ {', '.join(v4)} }} accept  # белый список\n"
+    if v6:
+        out += f"        ip6 saddr {{ {', '.join(v6)} }} accept  # белый список\n"
+    return out
+
+
+def nft_ruleset(ssh_port: int, web: bool, trust: list[str] | None = None) -> str:
     web_rule = "        tcp dport { 80, 443 } accept  # CF-only — в таблице shortcf\n" if web else ""
     return f"""#!/usr/sbin/nft -f
 # nodefw (mailer): входящие закрыты, кроме SSH{' и 80/443' if web else ''}. Исходящие не трогаем.
@@ -78,7 +117,7 @@ table inet nodefw {{
         iif "lo" accept
         ct state established,related accept
         ct state invalid drop
-        ip protocol icmp accept
+{_trust_rules(trust or [])}        ip protocol icmp accept
         meta l4proto ipv6-icmp accept
         udp dport {{ 68, 546 }} accept  # DHCP-ответы (v4/v6)
         tcp dport {ssh_port} accept
@@ -124,7 +163,7 @@ _ROLLBACK = (f"[ -f {CONF_DIR}/nodefw.nft ] && /usr/sbin/nft -f {CONF_DIR}/nodef
              "|| /usr/sbin/nft delete table inet nodefw")
 
 
-def apply_script(ssh_port: int, web: bool) -> str:
+def apply_script(ssh_port: int, web: bool, trust: list[str] | None = None) -> str:
     """Шаг 1: пакеты, проверка правил, таймер отката, применить (без автозагрузки)."""
     return f"""set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -139,7 +178,7 @@ if [ -n "$need" ]; then
 fi
 mkdir -p {CONF_DIR}
 cat > {CONF_DIR}/nodefw.nft.new <<'NFT'
-{nft_ruleset(ssh_port, web)}NFT
+{nft_ruleset(ssh_port, web, trust)}NFT
 nft -c -f {CONF_DIR}/nodefw.nft.new
 systemctl stop nodefw-rollback.timer nodefw-rollback.service >/dev/null 2>&1 || true
 systemctl reset-failed nodefw-rollback.timer nodefw-rollback.service >/dev/null 2>&1 || true
@@ -167,7 +206,12 @@ cat > /etc/fail2ban/jail.d/mailer-sshd.conf <<JAIL
 systemctl enable fail2ban >/dev/null 2>&1
 systemctl restart fail2ban
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  fail2ban-client status sshd >/dev/null 2>&1 && {{ echo F2B_OK; exit 0; }}
+  if fail2ban-client status sshd >/dev/null 2>&1; then
+    for ip in {' '.join(t for t in trust if '/' not in t or t.endswith(('/32', '/128')))}; do
+      fail2ban-client set sshd unbanip "${{ip%/*}}" >/dev/null 2>&1 || true
+    done
+    echo F2B_OK; exit 0
+  fi
   sleep 1
 done
 echo "fail2ban не поднял jail sshd" >&2
@@ -187,7 +231,7 @@ async def harden(node) -> tuple[bool, str]:
     """Поставить/обновить защиту на ноду. → (ok, текст для лога/карточки)."""
     port, web, trust = _port(node), _web(node), _trust_ips()
     try:
-        out = await _step(node, apply_script(port, web), timeout=300)
+        out = await _step(node, apply_script(port, web, trust), timeout=300)
         if "APPLIED" not in out:
             return False, f"правила не применились: {out[-200:]}"
     except NodeUnreachable as e:

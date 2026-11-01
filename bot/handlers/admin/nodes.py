@@ -14,7 +14,7 @@ from common.db import get_engine
 from common.models.node import Node
 from common.security import encrypt_password
 from common.config import settings
-from bot.fsm.admin import NodeAdd, NodeEdit
+from bot.fsm.admin import NodeAdd, NodeEdit, NodeTrust
 from bot.services import node_guard, node_pool
 
 router = Router(name="nodes-admin")
@@ -46,6 +46,7 @@ def kb_nodes_root() -> InlineKeyboardMarkup:
     for n in nodes:
         rows.append([InlineKeyboardButton(text=f"{_mark(n)} {n.ip}{_tags(n)}", callback_data=f"node:open:{n.id}")])
     rows.append([InlineKeyboardButton(text="➕ Добавить ноду", callback_data="node:add")])
+    rows.append([InlineKeyboardButton(text=f"🤍 Белый список IP ({len(node_guard.ui_trust())})", callback_data="node:trust")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="node:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -148,6 +149,55 @@ async def nodes_back(cq: CallbackQuery, state: FSMContext):
     # возврат в админку — через общий хелпер
     from bot.handlers.admin.index import back_to_admin
     await back_to_admin(cq)
+
+
+# ---------- белый список IP (все ноды) ----------
+def _trust_view():
+    ips = node_guard.ui_trust()
+    text = ("🤍 <b>Белый список IP</b> — для всех нод\n\n"
+            + ("\n".join(f"• <code>{ip}</code>" for ip in ips) if ips else "<i>пусто</i>")
+            + "\n\nС этих IP на ноды открыты <b>все порты</b>, fail2ban их не банит (и разбанит, если уже).\n"
+              "Применяется на все ноды автоматически за 1–2 минуты.\n\n"
+              "Пришлите IP (можно несколько, можно подсеть <code>1.2.3.0/24</code>) — добавлю.\n"
+              "Чтобы убрать — <code>-1.2.3.4</code>.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data="node:root")]])
+    return text, kb
+
+
+@router.callback_query(F.data == "node:trust")
+async def node_trust(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(NodeTrust.value)
+    text, kb = _trust_view()
+    try:
+        await cq.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=kb)
+    await cq.answer()
+
+
+@router.message(NodeTrust.value, F.text)
+async def node_trust_set(m: Message, state: FSMContext):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    ips, bad = set(node_guard.ui_trust()), []
+    for tok in m.text.replace(",", " ").split():
+        drop = tok.startswith("-")
+        net = node_guard.norm_ip(tok.lstrip("-"))
+        if not net:
+            bad.append(tok)
+        elif drop:
+            ips.discard(net)
+        else:
+            ips.add(net)
+    node_guard.set_ui_trust(list(ips))
+    text, kb = _trust_view()
+    note = "✅ Сохранено — ноды обновятся сами за 1–2 минуты."
+    if bad:
+        note += "\n⚠️ Не IP: " + ", ".join(f"<code>{_html.escape(b)}</code>" for b in bad[:10])
+    await m.answer(note + "\n\n" + text, reply_markup=kb)
 
 
 # ---------- add ----------

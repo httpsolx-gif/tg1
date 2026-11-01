@@ -23,6 +23,11 @@ class NodeEdit(StatesGroup):
     region = State()
 
 
+class NodeTrust(StatesGroup):
+    """NODES → 🤍 Белый список: ждём IP для добавления/удаления."""
+    value = State()
+
+
 class TemplateUpload(StatesGroup):
     """Загрузка шаблонов: кидаем .html файлы, имя решает service/mailbox."""
     waiting = State()
