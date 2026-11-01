@@ -166,6 +166,7 @@ def _auto_view(sid: int):
         [_btn(f"📈 Лимит автосмены: {cfg.switch_limit or '—'}", f"sco:autolim:{sid}")],
         [_btn(f"🔄 По кругу: {'вкл' if cfg.wrap else 'выкл'}", f"sco:wraptog:{sid}")],
         [_btn("⏭ Принуд. смена", f"sco:forced:{sid}")],
+        [_btn("🧹 Очистить запас", f"sco:resclr:{sid}")],
         [_btn("📤 Выгрузка SMTP", f"sco:dl:{sid}")],
         [_btn("⬅️ Назад", f"sco:card:{sid}")],
     ])
@@ -765,6 +766,58 @@ async def sco_clear_all_yes(cq: CallbackQuery):
     with Session(_engine) as db:
         n = _unlink(db, sid, [a.id for a in sc.base_accounts(db, sid)], [a.id for a in sc.base_aws(db, sid)])
     await _show(cq, sid, f"Очищено: {n}")
+
+
+# ---------- запас = все аккаунты базы, кроме текущего ----------
+def _reserve(db: Session, sid: int):
+    """→ (текущий (kind, acc) | None, [smtp_id], [aws_id]) — что уйдёт при «Очистить запас»."""
+    cfg = db.get(ScopeCfg, sid)
+    ents = sc.entries(db, sid)
+    cur = next(((k, a) for k, a in ents if sc.key(k, a) == cfg.current_key), None)
+    rest = [(k, a) for k, a in ents if cur is None or sc.key(k, a) != sc.key(*cur)]
+    return cur, [a.id for k, a in rest if k == "smtp"], [a.id for k, a in rest if k == "aws"]
+
+
+@router.callback_query(F.data.startswith("sco:resclr:"))
+async def sco_reserve_clear(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    sid = _scope_id(cq)
+    with Session(_engine) as db:
+        cur, smtp_ids, aws_ids = _reserve(db, sid)
+    if cur is None:
+        await cq.answer("Текущий аккаунт не выбран — запас не определить. Для полной очистки: 🗑 SMTP → Все",
+                        show_alert=True)
+        return
+    n = len(smtp_ids) + len(aws_ids)
+    if not n:
+        await cq.answer("Запас пуст — в базе только текущий", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [_btn(f"✅ Да, убрать {n}", f"sco:resclryes:{sid}"), _btn("❌ Нет", f"sco:auto:{sid}")],
+    ])
+    await cq.message.edit_text(
+        f"🧹 Убрать из базы весь запас — <b>{n}</b> шт ({len(smtp_ids)} SMTP, {len(aws_ids)} AWS)?\n"
+        f"Останется только текущий: <code>{_esc(sc.acc_email(*cur))}</code>", reply_markup=kb)
+    await cq.answer()
+
+
+@router.callback_query(F.data.startswith("sco:resclryes:"))
+async def sco_reserve_clear_yes(cq: CallbackQuery):
+    if not _admin(cq.from_user.id):
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    sid = _scope_id(cq)
+    with Session(_engine) as db:
+        cur, smtp_ids, aws_ids = _reserve(db, sid)  # заново: текущий мог смениться, пока думали
+        n = _unlink(db, sid, smtp_ids, aws_ids) if cur else 0
+    text, kb = _auto_view(sid)
+    try:
+        await cq.message.edit_text(f"🧹 Запас очищен: убрано {n}\n\n" + text, reply_markup=kb)
+    except Exception:
+        await cq.message.answer(text, reply_markup=kb)
+    await cq.answer()
 
 
 # ---------- SMTP: настроить (аккаунты базы) ----------
