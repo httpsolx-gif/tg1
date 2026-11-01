@@ -35,7 +35,6 @@ from bot.services.short_client import shorten_url
 from bot.services import mailer as mailer_svc
 from bot.services.node_runner import send_via_node, send_ses_via_node
 from bot.services.node_pool import send_nodes, ses_nodes, send_with_failover
-from bot.services.aws_ses import send_via_ses
 
 log = logging.getLogger("bot")
 _engine = get_engine()
@@ -307,17 +306,17 @@ async def _send_payload(
         from_disp = acc.email_from
         # ноды региона: основные → резервные; не ответила → следующая (п.59)
         nodes = ses_nodes(acc)
-        node, all_down = None, False
         if nodes:
             ok, info, node, all_down = await send_with_failover(nodes, lambda n: send_ses_via_node(
                 n, acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender")))
-        if node is not None:
-            via = f"SES через ноду {node.login}@{node.ip} ({acc.region})" + (" · резерв" if node.is_backup else "")
+            if node is not None:
+                via = f"SES через ноду {node.login}@{node.ip} ({acc.region})" + (" · резерв" if node.is_backup else "")
+            else:
+                via = f"SES {acc.region} — ноды региона недоступны"
         else:
-            # нет ноды региона или все лежат → SES с бота (меняется только IP API-запроса)
-            via = (f"SES {acc.region}, с бота — ноды региона не отвечают" if all_down
-                   else f"SES {acc.region}, с бота — нет ноды с этим регионом")
-            ok, info = await send_via_ses(acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
+            # только нода своего региона: нет её — не шлём (ни с бота, ни с чужой ноды)
+            via = f"SES {acc.region} — нет ноды с этим регионом"
+            ok, info = False, f"нет активной ноды отправки с регионом {acc.region} (NODES)"
     else:
         smtp = acc
         from_disp = smtp.email

@@ -467,7 +467,10 @@ def parse_smtp_line(ln: str) -> tuple[str, int, str, str, str]:
 
 async def _ingest_aws(db: Session, scope_id: int, ln: str) -> bool:
     from bot.services.aws_ses import parse_aws_line, check_aws
+    from bot.services.node_pool import region_nodes
     region, access, secret, email = parse_aws_line(ln)
+    if not region_nodes(region):
+        raise ValueError(f"нет активной ноды отправки с регионом {region} — добавьте её в NODES")
     acc = db.exec(
         select(AwsAccount).where(
             (AwsAccount.region == region) & (AwsAccount.access_key == access) & (AwsAccount.email_from == email)

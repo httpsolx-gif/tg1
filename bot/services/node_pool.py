@@ -53,15 +53,19 @@ def send_nodes() -> list[Node]:
     return _order([n for n in nodes if n.has_role("send")])
 
 
-def ses_nodes(aws) -> list[Node]:
-    """Кандидаты для SES: ноды с регионом аккаунта, плюс явная привязка aws.node_id."""
-    reg = (aws.region or "").strip().lower()
+def region_nodes(region: str | None) -> list[Node]:
+    """Активные ноды отправки с этим регионом AWS (точное совпадение кода, без регистра)."""
+    reg = (region or "").strip().lower()
+    if not reg:
+        return []
     with Session(_engine) as db:
         nodes = db.exec(select(Node).where(Node.is_active == True)).all()  # noqa: E712
-    picked = [n for n in nodes if reg and (n.region or "").strip().lower() == reg]
-    if aws.node_id and all(n.id != aws.node_id for n in picked):
-        picked += [n for n in nodes if n.id == aws.node_id]
-    return _order(picked)
+    return _order([n for n in nodes if n.has_role("send") and (n.region or "").strip().lower() == reg])
+
+
+def ses_nodes(aws) -> list[Node]:
+    """Кандидаты для SES: ТОЛЬКО ноды региона аккаунта (п.110: без ручной привязки и без IP бота)."""
+    return region_nodes(aws.region)
 
 
 def _mark_down(n: Node, info: str) -> None:
