@@ -8,7 +8,7 @@ from common.config import settings
 from bot.keyboards.admin_menu import admin_menu, admin_menu_inline, ADMIN_BUTTONS
 from bot.keyboards.main_menu import main_menu
 from bot.fsm.admin import (
-    SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, NodeTrust, TemplateUpload, RubricAdd, RubricEdit,
+    SmtpAdd, SmtpAutoAdd, NodeAdd, NodeEdit, NodeTrust, ChannelInput, TemplateUpload, RubricAdd, RubricEdit,
     RubricMailboxAdd, MailboxAdd, MailboxDomains, ScopeInput, SmtpLimit,
     ServiceCfgEdit, ShortDomainAdd, AccessAdd, UserFlow, ApiTokenFlow, SpamSeedAdd,
     BroadcastFlow, CatalogEdit, TemplateAssign, UniqTimes,
@@ -37,7 +37,7 @@ async def admin_entry(m: Message):
 @router.message(
     StateFilter(
         SmtpAdd.waiting_input, SmtpAutoAdd.waiting_input,
-        NodeAdd.waiting_input, NodeAdd.waiting_region, NodeEdit.region, NodeTrust.value,
+        NodeAdd.waiting_input, NodeAdd.waiting_region, NodeEdit.region, NodeTrust.value, ChannelInput.value,
         TemplateUpload.waiting, RubricAdd.name, RubricEdit.value, RubricMailboxAdd.waiting, MailboxAdd.waiting,
         MailboxDomains.waiting, ServiceCfgEdit.value,
         ScopeInput.smtp, ScopeInput.limit,

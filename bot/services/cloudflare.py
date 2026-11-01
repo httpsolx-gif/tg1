@@ -124,6 +124,31 @@ async def set_rate_limit(token: str, zone_id: str, requests: int = 30) -> None:
                json={"rules": [rule]})
 
 
+_RL_QUERY = """query($zone: String!, $since: Time!) { viewer { zones(filter: {zoneTag: $zone}) {
+  firewallEventsAdaptiveGroups(limit: 5, orderBy: [count_DESC],
+      filter: {datetime_geq: $since, source: "ratelimit"}) { count dimensions { clientIP } } } } }"""
+
+
+async def ratelimit_hits(token: str, zone_id: str, since_iso: str, timeout: int = 25) -> tuple[int, list[tuple[str, int]]]:
+    """Сколько запросов зарезал rate limit зоны с момента since (GraphQL Analytics).
+    → (всего в топе, [(ip, count)…]). Нужно право токена Zone → Analytics → Read."""
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {"query": _RL_QUERY, "variables": {"zone": zone_id, "since": since_iso}}
+    to = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=to) as s:
+        async with s.post(API + "/graphql", headers=headers, json=body) as r:
+            try:
+                data = await r.json()
+            except Exception:
+                raise CFError(f"HTTP {r.status}: {(await r.text())[:200]}")
+    if data.get("errors"):
+        raise CFError("; ".join(str(e.get("message")) for e in data["errors"])[:300])
+    zones = ((data.get("data") or {}).get("viewer") or {}).get("zones") or []
+    groups = zones[0].get("firewallEventsAdaptiveGroups") if zones else []
+    top = [((g.get("dimensions") or {}).get("clientIP") or "?", int(g.get("count") or 0)) for g in groups or []]
+    return sum(c for _, c in top), top
+
+
 async def create_origin_cert(token: str, hostnames: list[str], csr: str,
                              validity_days: int = 5475) -> tuple[str, str]:
     """Выпустить origin-сертификат по CSR. → (cert_pem, cert_id).

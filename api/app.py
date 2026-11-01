@@ -19,6 +19,10 @@ from api import worker
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    # отправки и автосмены API — в те же каналы, что у бота (п.118)
+    from common.config import settings
+    from common.logging.setup import configure_channels
+    configure_channels(settings.BOT_TOKEN)
     await worker.start()
     try:
         yield

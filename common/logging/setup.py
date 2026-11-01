@@ -20,6 +20,40 @@ from common.config import settings
 
 LOG_DIR = os.path.join(os.getcwd(), "logs")
 
+class OnlySwitch(logging.Filter):
+    """Записи об автосмене аккаунтов (extra is_switch=True) — в канал автосмен."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return bool(getattr(record, "is_switch", False))
+
+
+_channels_on = False
+
+
+def configure_channels(bot_token: str) -> None:
+    """Каналы Telegram (id — из бота / .env, common.channels). Без консоли и файлов —
+    годится и для процесса API (его отправки и автосмены тоже должны попадать в каналы)."""
+    global _channels_on
+    if _channels_on:
+        return
+    _channels_on = True
+    root = logging.getLogger()
+    if root.level > logging.INFO:  # в API корень по умолчанию WARNING — INFO-отправки терялись бы
+        root.setLevel(logging.INFO)
+    send_handler = TelegramChannelHandler(bot_token, "", level=logging.INFO, kind="send")
+    send_handler.setFormatter(logging.Formatter("📤 %(message)s"))
+    send_handler.addFilter(OnlySends())
+    root.addHandler(send_handler)
+
+    err_handler = TelegramChannelHandler(bot_token, "", level=logging.WARNING, kind="err")
+    err_handler.setFormatter(logging.Formatter("🚨 %(levelname)s: %(message)s"))
+    root.addHandler(err_handler)
+
+    sw_handler = TelegramChannelHandler(bot_token, "", level=logging.INFO, kind="switch")
+    sw_handler.setFormatter(logging.Formatter("%(message)s"))
+    sw_handler.addFilter(OnlySwitch())
+    root.addHandler(sw_handler)
+
+
 def configure_logging(bot_token: str):
     os.makedirs(LOG_DIR, exist_ok=True)
     root = logging.getLogger()
@@ -53,17 +87,7 @@ def configure_logging(bot_token: str):
         debug_file.setFormatter(JsonFormatter())
         root.addHandler(debug_file)
 
-    # Telegram channels
-    if settings.SEND_CHANNEL_ID:
-        send_handler = TelegramChannelHandler(bot_token, settings.SEND_CHANNEL_ID, level=logging.INFO)
-        send_handler.setFormatter(logging.Formatter("📤 %(msg)s"))
-        send_handler.addFilter(OnlySends())
-        root.addHandler(send_handler)
-
-    if settings.ERR_CHANNEL_ID:
-        err_handler = TelegramChannelHandler(bot_token, settings.ERR_CHANNEL_ID, level=logging.WARNING)
-        err_handler.setFormatter(logging.Formatter("🚨 %(levelname)s: %(msg)s"))
-        root.addHandler(err_handler)
+    configure_channels(bot_token)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("aiogram").setLevel(logging.INFO)

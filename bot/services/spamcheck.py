@@ -351,8 +351,8 @@ def format_card(results: list[dict]) -> str:
 async def run_and_report(bot, *, post_empty: bool = False) -> tuple[list[dict], bool]:
     """Прогнать проверку и отправить карточку в SPAMCHECK_CHANNEL_ID. (results, posted)."""
     results = await run_once()
-    from common.tgids import norm_chat_id
-    chan = norm_chat_id(settings.SPAMCHECK_CHANNEL_ID)  # «100…» без «-» → «-100…»
+    from common import channels
+    chan = channels.get("spam")
     posted = False
     if chan and (results or post_empty):
         try:
@@ -366,9 +366,13 @@ async def run_and_report(bot, *, post_empty: bool = False) -> tuple[list[dict], 
 async def spamcheck_loop(bot) -> None:
     """Фоновая задача: раз в SPAMCHECK_EVERY_MIN шлёт карточку в канал (0 = выкл)."""
     every = int(getattr(settings, "SPAMCHECK_EVERY_MIN", 0) or 0)
-    if every <= 0 or not (settings.SPAMCHECK_CHANNEL_ID or "").strip():
+    if every <= 0:
         return
+    from common import channels
     while True:
+        if not channels.get("spam"):  # канал задают в боте — ждём, не гоняем проверку вхолостую
+            await asyncio.sleep(60)
+            continue
         try:
             _, posted = await run_and_report(bot)
             log.info("spamcheck: cycle done (posted=%s)", posted)

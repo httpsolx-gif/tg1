@@ -147,6 +147,34 @@ _RLOCK = threading.Lock()
 _HITS = {}  # ip -> [начало окна, счётчик]
 _LAST_PRUNE = [0.0]
 
+# счётчики для бота (мониторинг флуда, п.118): накопительные с запуска → stats.json раз в 30 с
+STATS_FILE = os.environ.get("SHORTCF_STATS", "/var/lib/shortcf/stats.json")
+_STAT = {"started": time.time(), "req": 0, "r429": 0, "drop": 0}
+_TOP = {}  # ip -> сколько раз получил 429
+
+def stat(name, ip=None):
+    with _RLOCK:
+        _STAT[name] += 1
+        if ip is not None:
+            _TOP[ip] = _TOP.get(ip, 0) + 1
+            if len(_TOP) > 5000:  # не даём словарю расти при флуде с тысяч IP
+                for k, _ in sorted(_TOP.items(), key=lambda kv: kv[1])[:2500]:
+                    del _TOP[k]
+
+def _stats_writer():
+    while True:
+        time.sleep(30)
+        try:
+            with _RLOCK:
+                d = dict(_STAT)
+                d["top"] = dict(sorted(_TOP.items(), key=lambda kv: -kv[1])[:10])
+            tmp = STATS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(d, f)
+            os.replace(tmp, STATS_FILE)
+        except Exception as e:
+            sys.stderr.write("stats: %s\n" % e)
+
 def rate_ok(ip, now=None):
     now = time.monotonic() if now is None else now
     with _RLOCK:
@@ -244,7 +272,9 @@ class H(BaseHTTPRequestHandler):
             self.close_connection = True
             return
         ip = self.headers.get("CF-Connecting-IP") or self.client_address[0]
+        stat("req")
         if not rate_ok(ip):
+            stat("r429", ip)
             self.close_connection = True
             self._send(429, b"", {"Retry-After": str(int(RATE_WIN)), "Connection": "close"})
             return
@@ -293,6 +323,7 @@ class Server(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):  # потолок соединений — новые сразу закрываем
+            stat("drop")
             self.shutdown_request(request)
             return
         try:
@@ -330,6 +361,7 @@ class Server(ThreadingHTTPServer):
 
 def main():
     _init_db()
+    threading.Thread(target=_stats_writer, daemon=True).start()
     httpd = Server(("0.0.0.0", PORT), H, build_ctx())
     sys.stderr.write("shortcf listening on :%d (%d domains, max %d conn, %d req/%ds per ip)\n"
                      % (PORT, len(CONFS), MAX_CONN, RATE_N, RATE_WIN))

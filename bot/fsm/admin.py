@@ -23,6 +23,11 @@ class NodeEdit(StatesGroup):
     region = State()
 
 
+class ChannelInput(StatesGroup):
+    """OTHER → 📣 Каналы: ждём пересланный пост из канала или его id."""
+    value = State()
+
+
 class NodeTrust(StatesGroup):
     """NODES → 🤍 Белый список: ждём IP для добавления/удаления."""
     value = State()

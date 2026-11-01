@@ -1,7 +1,8 @@
 """BACKUP — выгрузка всех БД и бэкап в Telegram-канал. Колбэки `bk:`.
 
 «Выгрузить все БД» — дамп Postgres + clicks.db со всех shorter-нод, файлы
-приходят прямо в чат. «Бэкап в канал» — дамп в BACKUP_CHANNEL_ID (оффсайт).
+приходят прямо в чат. «Бэкап в канал» — дамп в канал бэкапов (оффсайт). Отправленные
+файлы с сервера удаляются (п.118).
 Авто-бэкап по расписанию живёт в main.py (`backup_loop`), период — BACKUP_EVERY_HOURS.
 """
 from __future__ import annotations
@@ -26,9 +27,11 @@ def _btn(t: str, cb: str) -> InlineKeyboardButton:
 
 
 def kb_backup_root() -> InlineKeyboardMarkup:
+    from common import channels
     hours = int(getattr(settings, "BACKUP_EVERY_HOURS", 0) or 0)
-    chan = (settings.BACKUP_CHANNEL_ID or "").strip()
-    auto = f"каждые {hours}ч → канал" if (hours and chan) else "выкл (BACKUP_CHANNEL_ID/HOURS)"
+    chan = channels.get("backup")
+    auto = (f"каждые {hours}ч → канал" if (hours and chan)
+            else "нет канала (📣 Каналы)" if not chan else "выкл (BACKUP_EVERY_HOURS)")
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("📦 Выгрузить все БД (в чат)", "bk:export")],
         [_btn("💾 Бэкап в канал сейчас", "bk:channel")],
@@ -58,7 +61,8 @@ async def bk_root(cq: CallbackQuery):
 @router.callback_query(F.data == "bk:info")
 async def bk_info(cq: CallbackQuery):
     await cq.answer(
-        "Авто-бэкап: задать BACKUP_CHANNEL_ID (бот — админ канала) и BACKUP_EVERY_HOURS в .env, перезапустить бота.",
+        "Авто-бэкап: канал — OTHER → 📣 Каналы → 🗄 Бэкапы (бот — админ канала), период — "
+        "BACKUP_EVERY_HOURS в .env. После отправки в канал дамп удаляется с сервера.",
         show_alert=True)
 
 
@@ -78,6 +82,7 @@ async def bk_export(cq: CallbackQuery):
     for p in files:
         try:
             await cq.message.answer_document(FSInputFile(str(p)), caption=p.name)
+            p.unlink(missing_ok=True)  # уже у тебя в чате — на сервере не держим
         except Exception as e:
             await cq.message.answer(f"🔴 Не отправился {p.name}: <code>{str(e)[:150]}</code>")
     await cq.message.answer(f"✅ Готово: {len(files)} файл(ов).", reply_markup=kb_backup_root())

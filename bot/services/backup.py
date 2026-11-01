@@ -4,7 +4,8 @@
   в `deploy/backups/`, с ротацией.
 - `fetch_node_clicks(node)` — забрать sqlite-лог переходов с origin-ноды по SSH.
 - `full_export()` — дамп БД + clicks.db со всех готовых shorter-нод (список файлов).
-- `backup_to_channel(bot)` — дамп + отправка в BACKUP_CHANNEL_ID (авто/по кнопке).
+- `backup_to_channel(bot)` — дамп + отправка в канал бэкапов (OTHER → 📣 Каналы / .env);
+  ушедший в канал файл удаляется с сервера, `sweep_to_channel` уносит хвосты (п.118).
 
 «Всегда» = периодическая задача в main.py шлёт дамп в Telegram-канал (оффсайт).
 """
@@ -133,36 +134,87 @@ async def full_export() -> list[Path]:
     return files
 
 
+def _unlink(p: Path) -> None:
+    try:
+        p.unlink()
+    except Exception:
+        pass
+
+
+async def _send_file(bot, chan: str, path: Path, caption: str) -> tuple[bool, str]:
+    """Файл в канал бэкапов; ушёл — удаляем с сервера (п.118: не копим дампы на диске)."""
+    from aiogram.types import FSInputFile
+    size = path.stat().st_size
+    if size > TG_UPLOAD_LIMIT:
+        # Bot API не примет файл > 50 МБ — оставляем на сервере, иначе потеряем бэкап
+        return False, (f"{path.name}: {size / 1024 / 1024:.1f} МБ больше лимита Telegram 50 МБ — "
+                       f"не отправлен, лежит на сервере: {path}")
+    try:
+        await bot.send_document(chan, FSInputFile(str(path)), caption=caption)
+    except Exception as e:
+        return False, f"{path.name}: send: {e}"
+    _unlink(path)
+    return True, path.name
+
+
+async def sweep_to_channel(bot) -> tuple[int, list[str]]:
+    """Все дампы, что лежат в deploy/backups (перед деплоем, выгрузки, неотправленные), —
+    в канал и с диска. → (отправлено, ошибки)."""
+    from common import channels
+    chan = channels.get("backup")
+    if not chan or not BACKUP_DIR.exists():
+        return 0, []
+    sent, errs = 0, []
+    files = sorted((p for pat in ("db_*.sql.gz", "db_*.sqlite.gz", "clicks_*.sqlite")
+                    for p in BACKUP_DIR.glob(pat)), key=lambda p: p.stat().st_mtime)
+    for p in files:
+        when = _dt.datetime.fromtimestamp(p.stat().st_mtime)
+        ok, info = await _send_file(bot, chan, p, f"🗄 {p.name} · {when:%Y-%m-%d %H:%M} · {p.stat().st_size // 1024} КБ")
+        if ok:
+            sent += 1
+        else:
+            errs.append(info)
+    return sent, errs
+
+
 async def backup_to_channel(bot) -> tuple[bool, str]:
-    """Сделать дамп БД и отправить в BACKUP_CHANNEL_ID. (ok, инфо)."""
-    from common.tgids import norm_chat_id
-    chan = norm_chat_id(settings.BACKUP_CHANNEL_ID)  # «100…» без «-» → «-100…»
+    """Сделать дамп БД и отправить в канал бэкапов (после отправки файл удаляется). (ok, инфо)."""
+    from common import channels
+    chan = channels.get("backup")
     if not chan:
-        return False, "BACKUP_CHANNEL_ID не задан"
+        return False, "канал бэкапов не задан (OTHER → 📣 Каналы)"
     try:
         path = await dump_database()
     except Exception as e:
         return False, str(e)
-    from aiogram.types import FSInputFile
-    size = path.stat().st_size
-    if size > TG_UPLOAD_LIMIT:
-        # Bot API не примет файл > 50 МБ — без проверки бэкапы молча переставали уходить
-        return False, (f"дамп {size / 1024 / 1024:.1f} МБ больше лимита Telegram 50 МБ — "
-                       f"в канал не отправлен, лежит на сервере: {path}")
-    try:
-        cap = f"🗄 Бэкап БД {_dt.datetime.now():%Y-%m-%d %H:%M} · {path.stat().st_size // 1024} КБ"
-        await bot.send_document(chan, FSInputFile(str(path)), caption=cap)
-        return True, path.name
-    except Exception as e:
-        return False, f"send: {e}"
+    cap = f"🗄 Бэкап БД {_dt.datetime.now():%Y-%m-%d %H:%M} · {path.stat().st_size // 1024} КБ"
+    ok, info = await _send_file(bot, chan, path, cap)
+    if ok:
+        await sweep_to_channel(bot)  # заодно — хвосты (дамп перед деплоем и т.п.)
+    return ok, info
 
 
 async def backup_loop(bot) -> None:
-    """Фоновая задача: раз в BACKUP_EVERY_HOURS шлёт дамп в канал (0 = выкл)."""
+    """Фон: раз в BACKUP_EVERY_HOURS — дамп в канал; каждый час — хвосты из deploy/backups
+    в канал и с диска. Канал задаётся в боте — проверяем на каждом шаге."""
     hours = int(getattr(settings, "BACKUP_EVERY_HOURS", 0) or 0)
-    if hours <= 0 or not (settings.BACKUP_CHANNEL_ID or "").strip():
-        return
+    last_dump = 0.0
+    import time
+    await asyncio.sleep(60)  # после старта: деплой уже проверен — его дамп можно уносить
     while True:
-        ok, info = await backup_to_channel(bot)
-        log.info("auto-backup: %s %s", "ok" if ok else "FAIL", info)
-        await asyncio.sleep(hours * 3600)
+        try:
+            if hours > 0 and time.time() - last_dump >= hours * 3600:
+                ok, info = await backup_to_channel(bot)
+                if ok or "не задан" not in info:
+                    log.info("auto-backup: %s %s", "ok" if ok else "FAIL", info)
+                    if not ok:
+                        log.warning("авто-бэкап не ушёл в канал: %s", info)
+                last_dump = time.time() if ok else last_dump
+            sent, errs = await sweep_to_channel(bot)
+            if sent:
+                log.info("backup sweep: %s файл(ов) → канал, удалены с диска", sent)
+            for e in errs:
+                log.warning("бэкап не ушёл в канал: %s", e)
+        except Exception as e:
+            log.warning("backup loop: %s", e)
+        await asyncio.sleep(3600)

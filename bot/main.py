@@ -171,6 +171,13 @@ async def main():
     except Exception as e:
         logging.getLogger("bot").warning("short autoloop not started: %s", e)
 
+    # Уведомления об атаках (брутфорс SSH, флуд сокращалки, rate limit CF) → канал ошибок (п.118)
+    try:
+        from bot.services.attack_watch import watch_loop
+        asyncio.create_task(watch_loop(bot))
+    except Exception as e:
+        logging.getLogger("bot").warning("attack watch not started: %s", e)
+
     # Защита нод (фаервол + fail2ban) — сама докатывается на новые/изменённые ноды
     try:
         from bot.services.node_guard import guard_loop

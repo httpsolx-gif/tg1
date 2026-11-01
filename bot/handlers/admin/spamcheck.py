@@ -324,7 +324,7 @@ async def _run_now(bot, chat_id: int):
     """Фоновый прогон: карточка уходит в канал (если настроен) и ответом админу."""
     try:
         results, posted = await run_and_report(bot, post_empty=True)
-        note = "" if posted else "\n\n<i>(SPAMCHECK_CHANNEL_ID не задан — карточка только здесь)</i>"
+        note = "" if posted else "\n\n<i>(канал спам-проверки не задан — OTHER → 📣 Каналы; карточка только здесь)</i>"
         await bot.send_message(chat_id, format_card(results) + note)
     except Exception as e:
         log.warning("spamcheck run_now: %s", e)

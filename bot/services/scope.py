@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -16,6 +17,8 @@ from common.models.scope import ScopeCfg, ScopeSmtp, ScopeAws
 from common.models.smtp import SmtpAccount
 
 _engine = get_engine()
+log = logging.getLogger("bot")
+_dry: set[int] = set()  # области, где уже сообщили «все исчерпаны» (не спамим каждым письмом)
 
 
 def now_iso() -> str:
@@ -157,6 +160,40 @@ def reset_scope_count(scope_id: int, kind: str, acc_id: int) -> None:
             db.commit()
 
 
+def _scope_name(db: Session, cfg: ScopeCfg) -> str:
+    rname = None
+    if cfg.rubric_id:
+        from common.models.rubric import Rubric
+        r = db.get(Rubric, cfg.rubric_id)
+        rname = r.name if r else None
+    return label(cfg, rname)
+
+
+def _switch_note(db: Session, cfg: ScopeCfg, ents, counts, old_key, pick, reason: str) -> None:
+    """В канал автосмен (extra is_switch): «область: старый → новый (причина)»."""
+    try:
+        old = next(((k, a) for k, a in ents if key(k, a) == old_key), None)
+        def nm(p):
+            k, a = p
+            return f"{acc_email(k, a)}" + (" ☁️" if k == "aws" else "")
+        if pick is None:
+            if cfg.id in _dry:
+                return
+            _dry.add(cfg.id)
+            log.info("⛔ %s: все аккаунты базы исчерпаны/выключены — отправка встала", _scope_name(db, cfg),
+                     extra={"is_switch": True})
+            return
+        _dry.discard(cfg.id)
+        if old is None:
+            return  # первый выбор в новой базе — не смена
+        lim = limit_for(old[1], cfg)
+        used = f" ({counts.get(old_key, 0)}/{lim})" if lim else ""
+        log.info("🔁 %s: %s%s → %s · %s", _scope_name(db, cfg), nm(old), used, nm(pick), reason,
+                 extra={"is_switch": True})
+    except Exception as e:
+        log.debug("switch note: %s", e)
+
+
 def current_entry(db: Session, cfg: ScopeCfg, *, advance: bool = False) -> Optional[tuple[str, object]]:
     """Текущий аккаунт базы (SMTP или AWS); недоступен (или advance=принуд. смена) — следующий по кругу.
 
@@ -191,16 +228,27 @@ def current_entry(db: Session, cfg: ScopeCfg, *, advance: bool = False) -> Optio
             # принуд. смена: после сброса всё равно уходим с текущего (если есть другой)
             others = [p for p in active if key(*p) != cfg.current_key] if advance else []
             pick = (others or active)[0]
+            _switch_note(db, cfg, ents, counts, cfg.current_key, pick,
+                         "по кругу: все отработали лимит, счётчики сброшены")
             cfg.current_key = key(*pick)
             db.add(cfg)
             db.commit()
             db.refresh(pick[1])
             return pick
+    if pick is None:
+        _switch_note(db, cfg, ents, counts, cfg.current_key, None, "")
     if pick is not None and key(*pick) != cfg.current_key:
+        cur = next((a for k, a in ents if key(k, a) == cfg.current_key), None)
+        reason = ("принудительная смена" if advance
+                  else "аккаунт выключен" if cur is not None and not cur.is_active
+                  else "лимит автосмены")
+        _switch_note(db, cfg, ents, counts, cfg.current_key, pick, reason)
         cfg.current_key = key(*pick)
         db.add(cfg)
         db.commit()
         db.refresh(pick[1])  # commit экспайрит объекты — подгружаем, чтобы работать вне сессии
+    if pick is not None:
+        _dry.discard(cfg.id)  # снова есть чем слать — следующее «исчерпаны» сообщим
     return pick
 
 
