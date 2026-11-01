@@ -6,7 +6,7 @@ Yahoo, United-Internet (web.de/gmx), Mail.ru, Yandex, Apple, Proton, Zoho.
 Результат кэшируется (память + таблица mx_cache), DNS дёргается один раз на домен.
 
 Рубрика (п.115): публичные домены — рубрика провайдера (gmail/hotmail/icloud/yahoo),
-локальные бесплатные почты → main; свой/корп домен по MX — только Google/Microsoft/
+локальные бесплатные почты → tonline (нет → main); свой/корп домен по MX — только Google/Microsoft/
 Apple/Yahoo → их рубрика, прочий хостинг, шлюзы и нераспознанное → None (→ other).
 Чистый модуль (sqlmodel + common + subprocess, без aiogram).
 """
@@ -68,12 +68,16 @@ PROVIDER_MAILBOX = {
 }
 # Рубрика по провайдеру (п.115):
 #  • публичный домен провайдера (gmail.com, aol.com, posteo.de…) → рубрика провайдера,
-#    малоизвестные локальные бесплатные почты → main;
+#    малоизвестные локальные бесплатные почты → tonline (нет её → main);
 #  • свой/корп домен — по MX: только крупные (Google/Microsoft/Apple/Yahoo) → их рубрика,
 #    остальной хостинг (IONOS, Zoho, свой сервер, шлюзы…) → None → other.
+# локальные/малоизвестные почты (не крупные web/gmx/o2/onet/wp/interia из «Почт» Main) — п.117
+LOCAL_RUBRIC = "tonline"
 PROVIDER_RUBRIC = {"google": "gmail", "microsoft": "hotmail", "apple": "icloud", "yahoo": "yahoo",
                    # по MX видно, что это потребительский почтовик (fun-домены GMX, freenet, vodafone…)
-                   "unitedinternet": "main", "mailru": "main", "localfree": "main"}
+                   "unitedinternet": LOCAL_RUBRIC, "mailru": LOCAL_RUBRIC, "localfree": LOCAL_RUBRIC}
+# нет рубрики с нужным именем → пробуем эту
+FALLBACK_RUBRIC = {LOCAL_RUBRIC: "main"}
 
 # метка домена → провайдер, для любого TLD (hotmail.fr, live.de, yahoo.co.jp, aol.de…)
 _LABEL_PROVIDER = {
@@ -171,6 +175,6 @@ def rubric_name_for_domain(domain: str) -> str | None:
     """Имя рубрики для домена получателя, не найденного в «Почтах» рубрик; None → other."""
     pub = public_provider(domain)
     if pub:
-        return PROVIDER_RUBRIC.get(pub, "main")
+        return PROVIDER_RUBRIC.get(pub, LOCAL_RUBRIC)
     p = provider_for_domain(domain)  # свой домен — по MX
     return PROVIDER_RUBRIC.get(p) if p else None

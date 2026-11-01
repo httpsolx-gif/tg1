@@ -65,10 +65,11 @@ def rubric_for_email(email: str) -> dict | None:
                 return _rubric_dict(r)
         # корп/кастомный домен — по MX определить реального провайдера и его рубрику
         try:
-            from bot.services.mxlookup import rubric_name_for_domain
+            from bot.services.mxlookup import rubric_name_for_domain, FALLBACK_RUBRIC
             rn = rubric_name_for_domain(dom)
-            if rn and rn in by_name and rn not in (BLACK_RUBRIC,):
-                return _rubric_dict(by_name[rn])
+            for cand in (rn, FALLBACK_RUBRIC.get(rn)):
+                if cand and cand in by_name and cand != BLACK_RUBRIC:
+                    return _rubric_dict(by_name[cand])
         except Exception:
             pass
         return _rubric_dict(other) if other else None
