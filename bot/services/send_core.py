@@ -55,17 +55,45 @@ def _log_send(payload: dict, res: dict, *, user_id, api_token_id, ext_username) 
     """
     who = (ext_username and f"@{ext_username}") or (f"id{user_id}" if user_id else None) \
         or (f"API#{api_token_id}" if api_token_id else "бот")
-    tag = f"{payload.get('country') or '—'}/{payload.get('service') or '—'}"
-    email = payload.get("email") or "?"
+    # имя API-токена (label), если отправка пришла по API
+    api_name = None
+    if api_token_id:
+        try:
+            from bot.services import api_tokens as _T
+            t = _T.get(api_token_id)
+            api_name = (t.label if t else None) or f"#{api_token_id}"
+        except Exception:
+            api_name = f"#{api_token_id}"
+    extra = payload.get("extra") or {}
+    pname = extra.get("*PNAME*")
+    price = extra.get("*PRICE*")
+    ok = bool(res.get("ok"))
     via = res.get("via") or "—"
-    if res.get("ok"):
-        log.info("✅ %s → %s [%s] · %s", email, tag, who, via, extra={"is_send": True})
-    else:
-        reason = (res.get("info") or "ошибка отправки").replace("\n", " ")[:300]
-        # в канал отправок — как неуспешная попытка
-        log.info("❌ %s → %s [%s]: %s", email, tag, who, reason, extra={"is_send": True})
-        # и в канал ошибок — как сбой отправки (без is_send, чтобы не дублировать в «отправках»)
-        log.warning("отправка не удалась: %s → %s [%s]: %s", email, tag, who, reason)
+    when = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    svc = f"{payload.get('country') or '—'}/{payload.get('service') or '—'}"
+    email = payload.get("email") or "?"
+    link = payload.get("link") or "—"
+    answer = ("Отправлено" if ok
+              else (res.get("info") or "ошибка отправки").replace("\n", " ")[:300])
+    # многострочная карточка (plain text — каналы без parse_mode): поля по просьбе юзера.
+    # «Узел» = via (какая нода/локально) — виден и на успехе, и на ошибке.
+    lines = [
+        "✅ Отправка" if ok else "❌ Отправка",
+        f"API: {api_name} ({who})" if api_name else f"Кто: {who}",
+        f"Время: {when}",
+        f"Сервис: {svc}",
+        f"Почта: {email}",
+        f"Ссылка: {link}",
+        f"Товар: {pname if pname is not None else '—'}",
+        f"Цена: {price if price is not None else '—'}",
+        f"Узел: {via}",
+        f"Ответ: {answer}",
+    ]
+    msg = "\n".join(lines)
+    # канал отправок — каждая попытка (ok и fail); канал ошибок (WARNING) — только fail
+    log.info(msg, extra={"is_send": True})
+    if not ok:
+        log.warning(msg)
 
 
 # ----------------------------- маршрутные помощники -----------------------------
