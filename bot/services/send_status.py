@@ -1,8 +1,7 @@
 """Статус отправки для клиента API (п.54).
 
-Клиенту отдаём минимум и только его данные (строки SendLog с его api_token_id).
-Полный email — PII, поэтому маскируем: `b***@gmail.com`. Машинный `status` +
-человекочитаемый `label` на русском:
+Клиенту отдаём только его данные (строки SendLog с его api_token_id): полный адрес
+получателя, машинный `status` + человекочитаемый `label` на русском:
 
     ok   → sent      «Отправлено»
     fail → error     «Ошибка отправки»
@@ -26,23 +25,14 @@ _LABELS = {
 }
 
 
-def mask_email(email: Optional[str]) -> Optional[str]:
-    """Прячем локальную часть: `bearnaer48@gmail.com` → `b***@gmail.com`."""
-    if not email or "@" not in email:
-        return email
-    local, _, domain = email.partition("@")
-    head = local[:1] if local else ""
-    return f"{head}***@{domain}"
-
-
 def _row_view(row: SendLog) -> dict:
-    """Безопасное представление строки лога для клиента (без PII и внутренних данных)."""
+    """Представление строки лога для клиента (без внутренних данных сервиса)."""
     code, label = _LABELS.get(row.status or "", ("unknown", "Неизвестно"))
     out = {
         "id": row.job_id,
         "status": code,
         "label": label,
-        "email": mask_email(row.email),
+        "email": row.email,
         "country": row.country,
         "service": row.service,
         "created_at": row.created_at,

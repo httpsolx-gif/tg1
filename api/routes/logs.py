@@ -2,8 +2,8 @@
 
 Раньше здесь был ОДИН статичный пароль (settings.API_LOG_AUTH_TOKEN) со сравнением
 `!=`, который отдал бы email получателей (PII) кому угодно с этим паролем. Заменено
-на обычный хэш-токен + отдельный scope. Отдаём МИНИМУМ полей и только отправки
-владельца токена (api_token_id), email замаскирован (`b***@gmail.com`).
+на обычный хэш-токен + отдельный scope. Отдаём только отправки
+владельца токена (api_token_id), с полным адресом получателя.
 """
 from fastapi import APIRouter, Depends, Query
 
@@ -18,11 +18,11 @@ _auth = require_token("logs:read")
 
 @router.get("/errors")
 def list_errors(tok=Depends(_auth), limit: int = Query(50, ge=1, le=500)):
-    """Последние НЕуспешные отправки этого токена (свежие сверху, email замаскирован)."""
+    """Последние НЕуспешные отправки этого токена (свежие сверху)."""
     return {"items": recent_sends(tok.id, limit=limit, only_errors=True), "limit": limit}
 
 
 @router.get("/sends")
 def list_sends(tok=Depends(_auth), limit: int = Query(50, ge=1, le=500)):
-    """Последние отправки этого токена (свежие сверху, email замаскирован)."""
+    """Последние отправки этого токена (свежие сверху)."""
     return {"items": recent_sends(tok.id, limit=limit), "limit": limit}
