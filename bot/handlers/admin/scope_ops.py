@@ -41,10 +41,7 @@ def _btn(text: str, cb: str) -> InlineKeyboardButton:
 
 
 def _back_cb(cfg: ScopeCfg) -> str:
-    if cfg.country == "*":
-        return "svc:root"
-    if cfg.service == "*":
-        return f"svc:c:{cfg.country}"
+    # область всегда открывается со страницы рубрик (страна → сервис → рубрика, ALL на любом шаге)
     return f"svc:s:{cfg.country}:{cfg.service}"
 
 

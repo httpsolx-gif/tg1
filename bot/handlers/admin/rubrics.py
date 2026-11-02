@@ -509,7 +509,8 @@ def _kb_countries() -> InlineKeyboardMarkup:
     # число сервисов рядом со страной: пустые (0) в отправке скрыты
     btns = [InlineKeyboardButton(text=f"{c.flag} {c.code} · {len(cs.get(c.code, []))}", callback_data=f"svc:c:{c.code}")
             for c in catalog.countries()]
-    rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data="sco:o:*:*:0")]]
+    # ALL стран → дальше выбор сервиса и рубрики (ALL на одной странице ≠ ALL на следующих)
+    rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data="svc:c:*")]]
     rows += [btns[i:i + 3] for i in range(0, len(btns), 3)]
     rows.append([InlineKeyboardButton(text="➕ Добавить страну", callback_data="svc:cadd")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
@@ -548,12 +549,18 @@ async def svc_country(cq: CallbackQuery):
 
 
 def _country_view(code: str):
-    svcs = catalog.services(code)
-    rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data=f"sco:o:{code}:*:0")]]
+    if code == "*":  # ALL стран: сервисы всех стран без повторов
+        svcs = sorted({s for ss in catalog.country_services().values() for s in ss}, key=str.lower)
+    else:
+        svcs = catalog.services(code)
+    rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data=f"svc:s:{code}:*")]]
     rows += [[InlineKeyboardButton(text=f"🔹 {s}", callback_data=f"svc:s:{code}:{s}")] for s in svcs]
-    rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data=f"svc:sadd:{code}")])
-    rows.append([InlineKeyboardButton(text="🗑 Удалить страну", callback_data=f"svc:cdel:{code}")])
+    if code != "*":
+        rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data=f"svc:sadd:{code}")])
+        rows.append([InlineKeyboardButton(text="🗑 Удалить страну", callback_data=f"svc:cdel:{code}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="svc:root")])
+    if code == "*":
+        return "🧩 🌐 ALL стран — выберите сервис:", InlineKeyboardMarkup(inline_keyboard=rows)
     hint = "" if svcs else "\n<i>Сервисов нет — в отправке страна скрыта.</i>"
     return f"🧩 {catalog.country_flag(code)} {code} — выберите сервис:{hint}", InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -567,14 +574,22 @@ async def svc_service(cq: CallbackQuery):
     with Session(_engine) as db:
         rubrics = db.exec(select(Rubric).order_by(Rubric.id)).all()
     rows = [[InlineKeyboardButton(text="🌐 ALL", callback_data=f"sco:o:{code}:{service}:0")]]
-    rows += [[InlineKeyboardButton(text=f"🗂 {r.name}", callback_data=f"svc:r:{code}:{service}:{r.id}")] for r in rubrics]
-    rows.append([InlineKeyboardButton(text="🗑 Удалить сервис", callback_data=f"svc:sdel:{code}:{service}")])
+    # конкретные страна+сервис → карточка сервиса (svc:r), иначе (ALL стран/сервисов) → карточка области
+    concrete = code != "*" and service != "*"
+    rows += [[InlineKeyboardButton(
+        text=f"🗂 {r.name}",
+        callback_data=f"svc:r:{code}:{service}:{r.id}" if concrete else f"sco:o:{code}:{service}:{r.id}")]
+        for r in rubrics]
+    if concrete:
+        rows.append([InlineKeyboardButton(text="🗑 Удалить сервис", callback_data=f"svc:sdel:{code}:{service}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"svc:c:{code}")])
     _kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    title = (f"🧩 {'ALL стран' if code == '*' else code} · {'ALL сервисов' if service == '*' else service}"
+             " — выберите рубрику:")
     try:
-        await cq.message.edit_text(f"🧩 {service} — выберите рубрику:", reply_markup=_kb)
+        await cq.message.edit_text(title, reply_markup=_kb)
     except Exception:
-        await cq.message.answer(f"🧩 {service} — выберите рубрику:", reply_markup=_kb)
+        await cq.message.answer(title, reply_markup=_kb)
     await cq.answer()
 
 
