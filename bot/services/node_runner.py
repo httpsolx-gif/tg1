@@ -211,9 +211,75 @@ sys.exit(_run())
 '''
 
 
+_SES_QUOTA_MAIN = r'''
+import base64, json, sys, datetime, re, urllib.request, urllib.parse
+
+def _run():
+    d = json.loads(base64.b64decode(PAYLOAD_B64).decode("utf-8"))
+    region = d["region"]
+    host = "email.%s.amazonaws.com" % region
+    endpoint = "https://" + host + "/"
+    body = urllib.parse.urlencode({"Action": "GetSendQuota"})
+    ctype = "application/x-www-form-urlencoded; charset=utf-8"
+    n = datetime.datetime.utcnow()
+    amzdate = n.strftime("%Y%m%dT%H%M%SZ"); datestamp = n.strftime("%Y%m%d")
+    auth, _ = ses_sigv4(region, d["access"], d["secret"], body, ctype, amzdate, datestamp)
+    req = urllib.request.Request(endpoint, data=body.encode("utf-8"), method="POST")
+    req.add_header("Content-Type", ctype)
+    req.add_header("X-Amz-Date", amzdate)
+    req.add_header("Authorization", auth)
+    try:
+        resp = urllib.request.urlopen(req, timeout=int(d.get("timeout", 25)))
+        xml = resp.read().decode("utf-8", "ignore")
+        def g(tag):
+            m = re.search("<%s>([^<]*)</%s>" % (tag, tag), xml)
+            return (m.group(1) if m else "?").split(".")[0]
+        print("OK 24h: %s/%s, rate %s/s" % (g("SentLast24Hours"), g("Max24HourSend"), g("MaxSendRate")))
+        return 0
+    except Exception as e:
+        err = ""
+        try: err = e.read().decode("utf-8", "ignore")[:300]
+        except Exception: pass
+        print("ERR %s %s" % (e, err)); return 1
+
+sys.exit(_run())
+'''
+
+
 def _build_ses_node_source(payload_b64: str) -> str:
     import inspect
     return 'PAYLOAD_B64 = "%s"\n%s\n%s' % (payload_b64, inspect.getsource(ses_sigv4), _SES_MAIN)
+
+
+def _build_ses_quota_source(payload_b64: str) -> str:
+    import inspect
+    return 'PAYLOAD_B64 = "%s"\n%s\n%s' % (payload_b64, inspect.getsource(ses_sigv4), _SES_QUOTA_MAIN)
+
+
+async def check_ses_via_node(node, aws, *, timeout: int = 25) -> Tuple[bool, str]:
+    """Проверить доступ к SES (GetSendQuota) НА НОДЕ её региона по SSH, stdlib-SigV4.
+
+    Запрос к api AWS идёт с IP ноды региона — никогда с IP бота (как и отправка).
+    """
+    secret = decrypt_password(getattr(aws, "secret_key_enc", "") or "")
+    payload = {"region": aws.region, "access": aws.access_key, "secret": secret, "timeout": timeout}
+    b64 = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
+    source_code = _build_ses_quota_source(b64)
+    for interp in ("python3 -", "python -"):
+        try:
+            r = await _run_on_node(node, interp, input=source_code, timeout=timeout + 20)
+        except NodeUnreachable as e:
+            return False, f"{NODE_DOWN}{e}"
+        except Exception as e:
+            return False, f"SSH: {type(e).__name__}: {e}"
+        if r.exit_status == 127:
+            continue
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        if r.exit_status == 0 and out.startswith("OK"):
+            return True, out[3:].strip()
+        return False, (out or err or f"exit {r.exit_status}")
+    return False, f"{NODE_DOWN}python3/python не найден"
 
 
 async def send_ses_via_node(
