@@ -40,6 +40,20 @@ def resolve_template_html(service: str, mailbox: str) -> Optional[str]:
     return t.html if t else None
 
 
+def resolve_template_image(service: str, mailbox: str) -> tuple[Optional[str], Optional[str]]:
+    """Картинка шаблона (base64, MIME) по (service, mailbox) из библиотеки, иначе (None, None). п.128."""
+    from sqlmodel import Session, select
+    from common.db import get_engine
+    from common.models.template import EmailTemplate
+    with Session(get_engine()) as db:
+        t = db.exec(
+            select(EmailTemplate).where(
+                (EmailTemplate.service == service) & (EmailTemplate.mailbox == mailbox)
+            )
+        ).first()
+    return (t.image_b64, t.image_ct) if t else (None, None)
+
+
 def render_template(html: str, raw: Optional[dict] = None, **ctx) -> str:
     """Отрендерить шаблон. Поддерживает Jinja ({{ title }}, {{ url }}, {{ MAIL_URL }})
     и «сырые» плейсхолдеры без скобок: MAIL_URL (href кнопки) и ключи из `raw`

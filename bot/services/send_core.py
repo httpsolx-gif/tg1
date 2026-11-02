@@ -216,14 +216,20 @@ def build_payload(
 
     tpl_spec = resolve_template_html(service, code)
     tpl_gen = resolve_template_html(service, "") if tpl_spec is None else None
+    # картинка шаблона (п.128) берётся из ТОГО ЖЕ источника, что и выигравший HTML
+    from bot.services.templates import resolve_template_image
     if cfg.get("template_html"):
         tpl_label = "(из конфига сервиса)"
+        image_b64, image_ct = cfg.get("image_b64"), cfg.get("image_ct")
     elif tpl_spec is not None:
         tpl_label = f"<code>{_html.escape(service)}-{code}.html</code>"
+        image_b64, image_ct = resolve_template_image(service, code)
     elif tpl_gen is not None:
         tpl_label = f"<code>{_html.escape(service)}.html</code> (общий)"
+        image_b64, image_ct = resolve_template_image(service, "")
     else:
         tpl_label = f"<code>{_html.escape(service)}-{code}.html</code> ⚠️ (нет — будет стандартный)"
+        image_b64, image_ct = None, None
     html = cfg.get("template_html") or tpl_spec or tpl_gen or default_template()
 
     from bot.services import uniq
@@ -243,6 +249,8 @@ def build_payload(
         "subject": cfg.get("title") or rub.get("title") or "Notification",
         "template": html,
         "uniq_html": uniq_html,
+        "image_b64": image_b64,
+        "image_ct": image_ct,
         "link": link,
         "email": email,
         "short_provider": provider,
@@ -322,6 +330,13 @@ async def _send_payload(
     tpl = payload.get("uniq_html") or payload["template"]
     html = render_template(tpl, raw=raw, title=payload["subject"], url=short)
 
+    # Картинка шаблона (п.128): плейсхолдер _src1_ → ссылка на inline-часть MIME (cid).
+    # Нет картинки → ничего не трогаем (шлём как обычный text/html).
+    image_b64 = payload.get("image_b64")
+    image_ct = payload.get("image_ct")
+    if image_b64:
+        html = html.replace("_src1_", "cid:cid_src1")
+
     smtp = None
     from_disp = None
     via = "локально"
@@ -348,7 +363,8 @@ async def _send_payload(
         nodes = ses_nodes(acc)
         if nodes:
             ok, info, node, all_down = await send_with_failover(nodes, lambda n: send_ses_via_node(
-                n, acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender")))
+                n, acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender"),
+                image_b64=image_b64, image_ct=image_ct))
             if node is not None:
                 via = f"SES через ноду {node.login}@{node.ip} ({acc.region})" + (" · резерв" if node.is_backup else "")
                 addr = node.ip
@@ -367,7 +383,8 @@ async def _send_payload(
         nodes = send_nodes()
         if nodes:
             ok, info, node, all_down = await send_with_failover(nodes, lambda n: send_via_node(
-                n, smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender")))
+                n, smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"),
+                image_b64=image_b64, image_ct=image_ct))
             if node is not None:
                 via = f"SMTP через ноду {node.login}@{node.ip}" + (" · резерв" if node.is_backup else "")
                 addr = node.ip
@@ -383,7 +400,7 @@ async def _send_payload(
         else:
             via = "SMTP локально (активных нод нет)"
             addr = "локально"
-            ok, info = await mailer_svc.send_via_account(smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
+            ok, info = await mailer_svc.send_via_account(smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"), image_b64=image_b64, image_ct=image_ct)
 
     if ok:
         try:

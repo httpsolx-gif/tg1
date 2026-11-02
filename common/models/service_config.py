@@ -20,6 +20,9 @@ class ServiceRubricConfig(SQLModel, table=True):
     title: str | None = None
     template_html: str | None = None  # переопределение шаблона (иначе — по рубрике)
     template_name: str | None = None  # имя файла, из которого поставлен шаблон (п.65, для карточки)
+    # встроенная картинка шаблона (п.128): base64 + MIME-тип; плейсхолдер _src1_ → cid:cid_src1
+    image_b64: str | None = None
+    image_ct: str | None = None       # напр. image/png, image/jpeg
     # уникализация htmlmix (п.106/107): настройки + текущий активный вариант
     uniq_opts: str | None = None   # JSON {on, mode, times, opts}; None = выкл/дефолт
     uniq_html: str | None = None   # текущий сгенерированный вариант шаблона

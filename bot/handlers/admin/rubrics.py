@@ -466,7 +466,7 @@ async def srv_root(cq: CallbackQuery, state: FSMContext):
     await cq.answer()
 
 
-_CFG_FIELDS = ("sender_name", "title", "template_html", "uniq_opts")
+_CFG_FIELDS = ("sender_name", "title", "template_html", "uniq_opts", "image_b64", "image_ct")
 
 
 def _cfg_row(db: Session, service: str, rid: int | None, mailbox: str):
@@ -610,13 +610,30 @@ async def svc_rubric(cq: CallbackQuery, state: FSMContext):
 
 
 def set_template(service: str, rid: int, html: str, name: str | None) -> None:
-    """Поставить шаблон рубрике сервиса (rid=0 — ALL рубрик). п.65"""
+    """Поставить шаблон рубрике сервиса (rid=0 — ALL рубрик). п.65.
+
+    Картинка шаблона (п.128) сбрасывается — задаётся отдельным шагом загрузки
+    через `set_template_image` (если админ не нажал «Пропустить»)."""
     with Session(_engine) as db:
         cfg = _cfg_row(db, service, rid, "")
         if not cfg:
             cfg = ServiceRubricConfig(service=service, rubric_id=rid or None, mailbox="")
         cfg.template_html = html
         cfg.template_name = name
+        cfg.image_b64 = None   # новый шаблон — без старой картинки
+        cfg.image_ct = None
+        db.add(cfg)
+        db.commit()
+
+
+def set_template_image(service: str, rid: int, image_b64: str | None, image_ct: str | None) -> None:
+    """Прикрепить/снять картинку шаблона рубрике сервиса (rid=0 — ALL). п.128."""
+    with Session(_engine) as db:
+        cfg = _cfg_row(db, service, rid, "")
+        if not cfg:
+            cfg = ServiceRubricConfig(service=service, rubric_id=rid or None, mailbox="")
+        cfg.image_b64 = image_b64
+        cfg.image_ct = image_ct
         db.add(cfg)
         db.commit()
 

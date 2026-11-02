@@ -45,6 +45,11 @@ def _ensure_columns(engine):
         "ALTER TABLE service_rubric_config ALTER COLUMN rubric_id DROP NOT NULL",
         # имя файла шаблона, поставленного кидком файла с выбором рубрик (п.65)
         "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS template_name varchar",
+        # встроенная картинка шаблона (п.128): base64 + MIME-тип (_src1_ → cid:cid_src1)
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS image_b64 varchar",
+        "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS image_ct varchar",
+        "ALTER TABLE email_template ADD COLUMN IF NOT EXISTS image_b64 varchar",
+        "ALTER TABLE email_template ADD COLUMN IF NOT EXISTS image_ct varchar",
         # настройки уникализации htmlmix на связке сервис×рубрика (п.106)
         "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_opts varchar",
         "ALTER TABLE service_rubric_config ADD COLUMN IF NOT EXISTS uniq_html varchar",

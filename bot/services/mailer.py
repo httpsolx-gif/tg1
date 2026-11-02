@@ -188,13 +188,17 @@ async def send_via_account(
     sender_name: Optional[str] = None,
     timeout: Optional[float] = None,
     text_fallback: Optional[str] = None,
+    image_b64: Optional[str] = None,
+    image_ct: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Отправить HTML-письмо через переданный SMTP-аккаунт (модель SmtpAccount).
 
     sender_name — отображаемое имя отправителя (From: "Имя <email>").
+    image_b64/image_ct (п.128): inline-картинка в HTML (Content-ID cid_src1), иначе — без неё.
     Возвращает (ok, info|error). Перебирает режимы (SSL/STARTTLS/PLAIN) по порту.
     """
     from email.utils import formataddr
+    import base64 as _b64
 
     timeout = timeout if timeout is not None else float(getattr(settings, "SMTP_SEND_TIMEOUT", 20))
     password = decrypt_password(getattr(smtp, "password_enc", "") or "")
@@ -206,6 +210,10 @@ async def send_via_account(
     msg.set_content(text_fallback or "Включите HTML-режим, чтобы увидеть содержимое письма.")
     if html:
         msg.add_alternative(html, subtype="html")
+        if image_b64:
+            ct = (image_ct or "image/png").split("/")
+            mt, st = (ct[0], ct[1]) if len(ct) == 2 else ("image", "png")
+            msg.get_payload()[-1].add_related(_b64.b64decode(image_b64), mt, st, cid="<cid_src1>")
 
     last_err: Optional[str] = None
     for mode in _modes_to_try(smtp.port):

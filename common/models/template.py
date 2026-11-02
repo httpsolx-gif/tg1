@@ -17,3 +17,6 @@ class EmailTemplate(SQLModel, table=True):
     html: str
     filename: str | None = None
     created_at: str | None = None
+    # встроенная картинка шаблона (п.128): base64 + MIME-тип; плейсхолдер _src1_ → cid:cid_src1
+    image_b64: str | None = None
+    image_ct: str | None = None

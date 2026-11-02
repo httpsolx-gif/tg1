@@ -36,12 +36,14 @@ class NodeTrust(StatesGroup):
 class TemplateUpload(StatesGroup):
     """Загрузка шаблонов: кидаем .html файлы, имя решает service/mailbox."""
     waiting = State()
+    image = State()   # п.128: после загрузки спрашиваем картинку (data: up_service, up_mailbox)
 
 
 class TemplateAssign(StatesGroup):
     """Кинули .html (п.65): сервис по имени файла, галочками выбираем рубрики.
     data: tpl_service, tpl_html, tpl_name, tpl_sel (rubric_id; 0 = ALL рубрик)."""
     pick = State()
+    image = State()   # п.128: после сохранения спрашиваем картинку _src1_ (data: tpl_service, tpl_sel, tpl_name)
 
 
 class RubricAdd(StatesGroup):

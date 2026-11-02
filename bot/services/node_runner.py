@@ -53,6 +53,13 @@ def _run():
     msg.set_content(data.get("text") or "Enable HTML to view this message.")
     if data.get("html"):
         msg.add_alternative(data["html"], subtype="html")
+        img = data.get("image_b64")
+        if img:
+            raw = base64.b64decode(img)
+            ct = (data.get("image_ct") or "image/png").split("/")
+            mt, st = (ct[0], ct[1]) if len(ct) == 2 else ("image", "png")
+            # inline-картинка, на которую в HTML ссылается src="cid:cid_src1" (п.128)
+            msg.get_payload()[-1].add_related(raw, mt, st, cid="<cid_src1>")
 
     host = s["host"]; port = int(s["port"]); timeout = int(data.get("timeout", 30))
     ctx = ssl.create_default_context()
@@ -174,15 +181,32 @@ def _run():
     region = d["region"]
     host = "email.%s.amazonaws.com" % region
     endpoint = "https://" + host + "/"
-    params = {
-        "Action": "SendEmail",
-        "Source": d["source"],
-        "Destination.ToAddresses.member.1": d["to"],
-        "Message.Subject.Data": d.get("subject", ""),
-        "Message.Subject.Charset": "UTF-8",
-        "Message.Body.Html.Data": d.get("html", ""),
-        "Message.Body.Html.Charset": "UTF-8",
-    }
+    if d.get("image_b64"):
+        # С картинкой: SES SendEmail (query API) не умеет вложения → строим сырой MIME
+        # (multipart/related, inline-картинка Content-ID cid_src1) и шлём SendRawEmail (п.128).
+        from email.message import EmailMessage
+        m = EmailMessage()
+        m["From"] = d["source"]; m["To"] = d["to"]; m["Subject"] = d.get("subject", "")
+        m.set_content("Enable HTML to view this message.")
+        m.add_alternative(d.get("html", ""), subtype="html")
+        raw_img = base64.b64decode(d["image_b64"])
+        ct = (d.get("image_ct") or "image/png").split("/")
+        mt, st = (ct[0], ct[1]) if len(ct) == 2 else ("image", "png")
+        m.get_payload()[-1].add_related(raw_img, mt, st, cid="<cid_src1>")
+        params = {
+            "Action": "SendRawEmail",
+            "RawMessage.Data": base64.b64encode(m.as_bytes()).decode("ascii"),
+        }
+    else:
+        params = {
+            "Action": "SendEmail",
+            "Source": d["source"],
+            "Destination.ToAddresses.member.1": d["to"],
+            "Message.Subject.Data": d.get("subject", ""),
+            "Message.Subject.Charset": "UTF-8",
+            "Message.Body.Html.Data": d.get("html", ""),
+            "Message.Body.Html.Charset": "UTF-8",
+        }
     body = urllib.parse.urlencode(params)
     ctype = "application/x-www-form-urlencoded; charset=utf-8"
     now = d.get("_now")
@@ -291,14 +315,20 @@ async def send_ses_via_node(
     *,
     sender_name: Optional[str] = None,
     timeout: int = 30,
+    image_b64: Optional[str] = None,
+    image_ct: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    """Выполнить SES-отправку НА НОДЕ (её IP) по SSH, stdlib-SigV4 на ноде."""
+    """Выполнить SES-отправку НА НОДЕ (её IP) по SSH, stdlib-SigV4 на ноде.
+
+    image_b64/image_ct (п.128): если заданы — на ноде строится сырой MIME с inline-картинкой
+    (Content-ID cid_src1) и шлётся через SES SendRawEmail; иначе — обычный SendEmail."""
     from email.utils import formataddr
     secret = decrypt_password(getattr(aws, "secret_key_enc", "") or "")
     source = formataddr((sender_name, aws.email_from)) if sender_name else aws.email_from
     payload = {
         "region": aws.region, "access": aws.access_key, "secret": secret,
         "source": source, "to": to, "subject": subject, "html": html, "timeout": timeout,
+        "image_b64": image_b64, "image_ct": image_ct,
     }
     b64 = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
     source_code = _build_ses_node_source(b64)
@@ -329,8 +359,13 @@ async def send_via_node(
     sender_name: Optional[str] = None,
     text_fallback: Optional[str] = None,
     timeout: int = 30,
+    image_b64: Optional[str] = None,
+    image_ct: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    """Отправить письмо через ноду (SSH + python3 на ноде). (ok, info|error)."""
+    """Отправить письмо через ноду (SSH + python3 на ноде). (ok, info|error).
+
+    image_b64/image_ct (п.128): если заданы — в HTML-часть встраивается inline-картинка
+    (multipart/related, Content-ID cid_src1), иначе письмо как обычный text/html."""
     payload = {
         "smtp": {
             "host": smtp.host,
@@ -345,6 +380,8 @@ async def send_via_node(
         "text": text_fallback,
         "sender_name": sender_name,
         "timeout": timeout,
+        "image_b64": image_b64,
+        "image_ct": image_ct,
     }
     b64 = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
     source = 'PAYLOAD_B64 = "%s"\n%s' % (b64, _NODE_SCRIPT)

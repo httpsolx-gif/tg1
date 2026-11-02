@@ -42,6 +42,49 @@ def _kb_upload() -> InlineKeyboardMarkup:
     ])
 
 
+def _kb_skip_image() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Пропустить (без картинки)", callback_data="tpl:img:skip")],
+    ])
+
+
+_IMG_PROMPT = (
+    "🖼 Пришлите <b>картинку</b> для <code>_src1_</code> — <b>фото</b> или <b>файлом</b> "
+    "(png/jpg, любое имя). Она вставится в письмо как inline-изображение.\n"
+    "Или нажмите «⏭ Пропустить» — тогда письмо уйдёт как обычный HTML."
+)
+
+# расширение → MIME для картинок, присланных документом не с image/* mime
+_IMG_EXT_CT = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+               "gif": "image/gif", "webp": "image/webp"}
+
+
+async def _download_image(m: Message) -> tuple[str, str] | None:
+    """Достать картинку из сообщения (фото или документ-картинка) → (base64, mime). Иначе None.
+
+    Принимаем и как фото (Telegram сжимает в jpeg), и как файл-вложение с любым именем
+    (по mime image/* или по расширению png/jpg/jpeg/gif/webp)."""
+    import base64 as _b64
+    file_id = None
+    ct = None
+    if m.photo:
+        file_id = m.photo[-1].file_id
+        ct = "image/jpeg"
+    elif m.document:
+        mime = (m.document.mime_type or "")
+        name = (m.document.file_name or "").lower()
+        ext = name.rsplit(".", 1)[-1] if "." in name else ""
+        if mime.startswith("image/"):
+            file_id, ct = m.document.file_id, mime
+        elif ext in _IMG_EXT_CT:
+            file_id, ct = m.document.file_id, _IMG_EXT_CT[ext]
+    if not file_id:
+        return None
+    f = await m.bot.get_file(file_id)
+    buf = await m.bot.download_file(f.file_path)
+    return _b64.b64encode(buf.read()).decode("ascii"), (ct or "image/png")
+
+
 def _kb_list() -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
     with Session(_engine) as db:
@@ -131,7 +174,11 @@ async def tpl_upload_doc(m: Message, state: FSMContext):
     html = content.read().decode("utf-8", errors="ignore")
     created = _upsert_template(service, mailbox, html, doc.file_name)
     verb = "добавлен" if created else "обновлён"
-    await m.answer(f"✅ <b>{service}</b> · {mailbox or 'все'} — шаблон {verb}.", reply_markup=_kb_upload())
+    await m.answer(f"✅ <b>{service}</b> · {mailbox or 'все'} — шаблон {verb}.")
+    # шаг картинки (п.128)
+    await state.set_state(TemplateUpload.image)
+    await state.update_data(up_service=service, up_mailbox=mailbox)
+    await m.answer(_IMG_PROMPT, reply_markup=_kb_skip_image())
 
 
 @router.message(TemplateUpload.waiting, F.text)
@@ -139,6 +186,63 @@ async def tpl_upload_hint(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     await m.answer("Пришлите <b>.html</b> файл, либо нажмите «Готово».", reply_markup=_kb_upload())
+
+
+# ---------- шаг картинки для прямой загрузки (📤 Загрузить, п.128) ----------
+@router.message(TemplateUpload.image, F.photo | F.document)
+async def tpl_upload_image(m: Message, state: FSMContext):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    doc = m.document
+    # прислали новый .html вместо картинки → это следующий шаблон: грузим и снова спрашиваем картинку
+    if doc and (doc.file_name or "").lower().endswith(_TPL_EXT):
+        try:
+            service, mailbox = parse_template_filename(doc.file_name or "")
+        except ValueError as e:
+            await m.answer(f"❌ <code>{escape(doc.file_name or '')}</code>: {e}", reply_markup=_kb_skip_image())
+            return
+        file = await m.bot.get_file(doc.file_id)
+        content = await m.bot.download_file(file.file_path)
+        html = content.read().decode("utf-8", errors="ignore")
+        created = _upsert_template(service, mailbox, html, doc.file_name)
+        verb = "добавлен" if created else "обновлён"
+        await m.answer(f"✅ <b>{service}</b> · {mailbox or 'все'} — шаблон {verb}.")
+        await state.update_data(up_service=service, up_mailbox=mailbox)
+        await m.answer(_IMG_PROMPT, reply_markup=_kb_skip_image())
+        return
+    img = await _download_image(m)
+    if img is None:
+        await m.answer("Это не похоже на картинку. Пришлите png/jpg (фото или файлом), новый .html или «⏭ Пропустить».",
+                       reply_markup=_kb_skip_image())
+        return
+    data = await state.get_data()
+    service, mailbox = data.get("up_service"), data.get("up_mailbox", "")
+    _set_lib_image(service, mailbox, img[0], img[1])
+    await state.set_state(TemplateUpload.waiting)
+    await m.answer(f"🖼 Картинка прикреплена к <b>{escape(service or '')}</b> · {mailbox or 'все'} ({escape(img[1])}).\n"
+                   "Можно кидать ещё шаблоны или «Готово».", reply_markup=_kb_upload())
+
+
+@router.callback_query(TemplateUpload.image, F.data == "tpl:img:skip")
+async def tpl_upload_image_skip(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.set_state(TemplateUpload.waiting)
+    try:
+        await cq.message.edit_text("Без картинки. Кидайте ещё <b>.html</b> или нажмите «Готово».",
+                                   reply_markup=_kb_upload())
+    except Exception:
+        await cq.message.answer("Без картинки. Кидайте ещё <b>.html</b> или нажмите «Готово».",
+                                reply_markup=_kb_upload())
+    await cq.answer("Без картинки")
+
+
+@router.message(TemplateUpload.image, F.text)
+async def tpl_upload_image_hint(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    await m.answer(_IMG_PROMPT, reply_markup=_kb_skip_image())
 
 
 # ---------- кидок .html → сервис по имени → галочки рубрик (п.65) ----------
@@ -262,9 +366,12 @@ async def tpl_assign_cb(cq: CallbackQuery, state: FSMContext):
         names = dict(_rubrics())
         for rid in sorted(sel):
             set_template(service, rid, html, name)
-        await state.clear()
         where = ", ".join(("ALL" if rid == 0 else escape(names.get(rid, f"#{rid}"))) for rid in sorted(sel))
         await cq.message.edit_text(f"✅ <code>{escape(name)}</code> → <b>{escape(service)}</b>: {where}")
+        # шаг картинки (п.128): спрашиваем _src1_ или «Пропустить»
+        await state.set_state(TemplateAssign.image)
+        await state.update_data(tpl_service=service, tpl_sel=sorted(sel), tpl_name=name)
+        await cq.message.answer(_IMG_PROMPT, reply_markup=_kb_skip_image())
         await cq.answer("Сохранено")
         return
     if act == "every":
@@ -292,6 +399,46 @@ async def tpl_assign_hint(m: Message):
     if m.from_user.id not in settings.admin_ids_set:
         return
     await m.answer("Отметьте рубрики кнопками под файлом и нажмите «✅ Сохранить» (или «✖️ Отмена»).")
+
+
+# ---------- шаг картинки _src1_ (п.128) ----------
+@router.message(TemplateAssign.image, F.photo | F.document)
+async def tpl_assign_image(m: Message, state: FSMContext):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    img = await _download_image(m)
+    if img is None:
+        await m.answer("Это не похоже на картинку. Пришлите png/jpg (фото или файлом) или «⏭ Пропустить».",
+                       reply_markup=_kb_skip_image())
+        return
+    data = await state.get_data()
+    service = data.get("tpl_service"); sel = data.get("tpl_sel") or []
+    from bot.handlers.admin.rubrics import set_template_image
+    for rid in sel:
+        set_template_image(service, rid, img[0], img[1])
+    await state.clear()
+    await m.answer(f"🖼 Картинка прикреплена к шаблону <b>{escape(service or '')}</b> ({escape(img[1])}). "
+                   "В письме <code>_src1_</code> → картинка.", reply_markup=_kb_upload())
+
+
+@router.callback_query(TemplateAssign.image, F.data == "tpl:img:skip")
+async def tpl_assign_image_skip(cq: CallbackQuery, state: FSMContext):
+    if cq.from_user.id not in settings.admin_ids_set:
+        await cq.answer("Нет доступа", show_alert=True)
+        return
+    await state.clear()
+    try:
+        await cq.message.edit_text("Готово — шаблон без картинки (обычный HTML).")
+    except Exception:
+        await cq.message.answer("Готово — шаблон без картинки (обычный HTML).")
+    await cq.answer("Без картинки")
+
+
+@router.message(TemplateAssign.image, F.text)
+async def tpl_assign_image_hint(m: Message):
+    if m.from_user.id not in settings.admin_ids_set:
+        return
+    await m.answer(_IMG_PROMPT, reply_markup=_kb_skip_image())
 
 
 # ---------- list / delete ----------
@@ -360,6 +507,8 @@ def _upsert_template(service: str, mailbox: str, html: str, filename: str | None
             existing.html = html
             existing.filename = filename
             existing.created_at = datetime.utcnow().isoformat()
+            existing.image_b64 = None   # новый html — сбрасываем старую картинку (п.128)
+            existing.image_ct = None
             db.add(existing)
             db.commit()
             return False
@@ -367,5 +516,22 @@ def _upsert_template(service: str, mailbox: str, html: str, filename: str | None
             service=service, mailbox=mailbox, html=html,
             filename=filename, created_at=datetime.utcnow().isoformat(),
         ))
+        db.commit()
+        return True
+
+
+def _set_lib_image(service: str, mailbox: str, image_b64: str | None, image_ct: str | None) -> bool:
+    """Прикрепить картинку к шаблону библиотеки EmailTemplate(service, mailbox). п.128."""
+    with Session(_engine) as db:
+        t = db.exec(
+            select(EmailTemplate).where(
+                (EmailTemplate.service == service) & (EmailTemplate.mailbox == mailbox)
+            )
+        ).first()
+        if not t:
+            return False
+        t.image_b64 = image_b64
+        t.image_ct = image_ct
+        db.add(t)
         db.commit()
         return True

@@ -38,7 +38,8 @@ async def admin_entry(m: Message):
     StateFilter(
         SmtpAdd.waiting_input, SmtpAutoAdd.waiting_input,
         NodeAdd.waiting_input, NodeAdd.waiting_region, NodeEdit.region, NodeTrust.value, ChannelInput.value,
-        TemplateUpload.waiting, RubricAdd.name, RubricEdit.value, RubricMailboxAdd.waiting, MailboxAdd.waiting,
+        TemplateUpload.waiting, TemplateUpload.image, TemplateAssign.image,
+        RubricAdd.name, RubricEdit.value, RubricMailboxAdd.waiting, MailboxAdd.waiting,
         MailboxDomains.waiting, ServiceCfgEdit.value,
         ScopeInput.smtp, ScopeInput.limit,
         SmtpLimit.value,
