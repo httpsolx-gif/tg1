@@ -86,7 +86,7 @@ def _log_send(payload: dict, res: dict, *, user_id, api_token_id, ext_username) 
         f"Ссылка: {link}",
         f"Товар: {pname if pname is not None else '—'}",
         f"Цена: {price if price is not None else '—'}",
-        f"Узел: {via}",
+        f"Узел: {res.get('addr') or via}",
         f"Ответ: {answer}",
     ]
     msg = "\n".join(lines)
@@ -314,6 +314,7 @@ async def _send_payload(
     smtp = None
     from_disp = None
     via = "локально"
+    addr = "локально"   # IP, с которого реально ушло письмо (нода) — для карточки «Узел»
     has_base, pick, scope_id = scope_pick(payload.get("country"), payload.get("service"), payload.get("rubric_id"))
     if not has_base:
         smtp = await pick_smtp(
@@ -327,7 +328,7 @@ async def _send_payload(
             where = ("в базе области (все исчерпаны/выключены)" if has_base
                      else f"(базы области нет, в разделе SMTP для группы «{payload['group']}» тоже)")
         return {"ok": False, "no_account": True, "info": where,
-                "short": short, "from_disp": None, "via": via}
+                "short": short, "from_disp": None, "via": via, "addr": "—"}
     kind, acc = pick
 
     if kind == "aws":
@@ -339,11 +340,14 @@ async def _send_payload(
                 n, acc, payload["email"], payload["subject"], html, sender_name=payload.get("sender")))
             if node is not None:
                 via = f"SES через ноду {node.login}@{node.ip} ({acc.region})" + (" · резерв" if node.is_backup else "")
+                addr = node.ip
             else:
                 via = f"SES {acc.region} — ноды региона недоступны"
+                addr = "—"
         else:
             # только нода своего региона: нет её — не шлём (ни с бота, ни с чужой ноды)
             via = f"SES {acc.region} — нет ноды с этим регионом"
+            addr = "—"
             ok, info = False, f"нет активной ноды отправки с регионом {acc.region} (NODES)"
     else:
         smtp = acc
@@ -355,15 +359,19 @@ async def _send_payload(
                 n, smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender")))
             if node is not None:
                 via = f"SMTP через ноду {node.login}@{node.ip}" + (" · резерв" if node.is_backup else "")
+                addr = node.ip
             else:
                 # все ноды лежат — НЕ шлём с IP бота, отдаём ошибку
                 via = "SMTP — все ноды недоступны"
+                addr = "—"
         elif has_send_nodes():
             # ноды есть, но все с регионом (они только под SES) — с IP бота не шлём
             via = "SMTP — нет ноды без региона"
+            addr = "—"
             ok, info = False, "нет активной ноды отправки без региона (ноды с регионом — только для SES своего региона)"
         else:
             via = "SMTP локально (активных нод нет)"
+            addr = "локально"
             ok, info = await mailer_svc.send_via_account(smtp, payload["email"], payload["subject"], html, sender_name=payload.get("sender"))
 
     if ok:
@@ -395,4 +403,4 @@ async def _send_payload(
     except Exception as e:
         log.warning("SendLog: %s", e)
 
-    return {"ok": ok, "info": info, "short": short, "from_disp": from_disp, "via": via}
+    return {"ok": ok, "info": info, "short": short, "from_disp": from_disp, "via": via, "addr": addr}
