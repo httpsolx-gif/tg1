@@ -58,11 +58,13 @@ async def cancel_add_on_menu(m: Message, state: FSMContext):
     await state.clear()
     await m.answer("Ввод отменён.", reply_markup=admin_menu())
 
-# выход из админки назад в главное
+# «Назад» из разделов: у админа главная — ВСЕГДА админка; обычному юзеру — главное меню
 @router.message(F.text.in_({"⬅️ Назад", "Назад"}))
 async def admin_back(m: Message):
-    is_admin = (m.from_user.id in settings.admin_ids_set)
-    await m.answer("Главное меню:", reply_markup=main_menu(is_admin=is_admin))
+    if m.from_user.id in settings.admin_ids_set:
+        await m.answer("🛠 Админка — выберите раздел:", reply_markup=admin_menu_inline())
+        return
+    await m.answer("Главное меню:", reply_markup=main_menu(is_admin=False))
 
 # возврат в админку из инлайн-разделов (SHORT и т.п.) по кнопке «⬅️ Назад»
 @router.callback_query(F.data == "admin:back")
@@ -92,13 +94,8 @@ async def admin_section(cq: CallbackQuery, state: FSMContext):
     await state.clear()
 
     if sec == "back":
-        # из админки в главное меню (reply)
-        try:
-            await cq.message.delete()
-        except TelegramBadRequest:
-            pass
-        await cq.message.answer("Главное меню:", reply_markup=main_menu(is_admin=True))
-        await cq.answer()
+        # у админа главная — всегда админка: «назад» возвращает в корень админки
+        await back_to_admin(cq)
         return
 
     # text + keyboard каждого раздела (переиспользуем сборщики клавиатур)

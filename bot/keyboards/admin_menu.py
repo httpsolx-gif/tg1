@@ -34,7 +34,7 @@ def admin_menu_inline() -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:back")])
+    # «⬅️ Назад» в корне нет: у админа главная — всегда админка (выходить некуда).
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def admin_menu() -> ReplyKeyboardMarkup:
