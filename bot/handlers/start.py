@@ -14,10 +14,16 @@ log = logging.getLogger("bot")
 @router.message(CommandStart())
 async def start(m: Message, state: FSMContext):
     is_admin = (m.from_user.id in settings.admin_ids_set)
-    # нижнее меню (📨/📋/🛠) + сразу выбор страны → сервиса, без лишнего шага
+    # нижнее меню (📨/📋/🛠)
     await m.answer("Привет!", reply_markup=main_menu(is_admin=is_admin))
-    from bot.handlers.flow_send import begin_send
-    await begin_send(m, state, greet="✉️ Отправка письма.")
+    if is_admin:
+        # админу по /start — сразу Админка
+        from bot.keyboards.admin_menu import admin_menu_inline
+        await m.answer("🛠 Админка — выберите раздел:", reply_markup=admin_menu_inline())
+    else:
+        # обычному юзеру — сразу выбор страны → сервиса, без лишнего шага
+        from bot.handlers.flow_send import begin_send
+        await begin_send(m, state, greet="✉️ Отправка письма.")
 
 # Кнопку «✉ Отправить письмо» обрабатывает flow_send (см. bot/handlers/flow_send.py)
 
