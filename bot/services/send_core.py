@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import html as _html
 import logging
+import re
 import secrets
 from datetime import datetime
 from typing import Optional
@@ -45,7 +46,7 @@ class SendError(Exception):
     Текст — готовое сообщение пользователю/клиенту."""
 
 
-def _log_send(payload: dict, res: dict, *, user_id, api_token_id, ext_username) -> None:
+def _log_send(payload: dict, res: dict, *, user_id, api_token_id, ext_username, ext_id=None) -> None:
     """Залогировать результат отправки в каналы (SEND_CHANNEL_ID / ERR_CHANNEL_ID).
 
     Канал отправок слушает записи с extra is_send=True (фильтр OnlySends) — туда идёт
@@ -53,8 +54,16 @@ def _log_send(payload: dict, res: dict, *, user_id, api_token_id, ext_username) 
     только фейл. Так в «отправках» виден весь поток, а в «ошибках» — только сбои
     (вкл. ошибки отправки, как и просили). Файлы sends.jsonl/errors.jsonl — заодно.
     """
-    who = (ext_username and f"@{ext_username}") or (f"id{user_id}" if user_id else None) \
-        or (f"API#{api_token_id}" if api_token_id else "бот")
+    def _clean_err(info: str) -> str:
+        """Чистый текст ошибки: из SES-XML берём <Message>, иначе срезаем теги и ERR/HTTP-воду."""
+        s = (info or "ошибка отправки").strip()
+        m = re.search(r"<Message>(.*?)</Message>", s, re.S)
+        if m:
+            return m.group(1).strip()
+        s = re.sub(r"<[^>]+>", " ", s)                       # долой XML-теги
+        s = re.sub(r"^ERR\s+(HTTP Error\s+\d+:\s*[A-Za-z ]+)?", "", s)  # долой «ERR HTTP Error 400: Bad Request»
+        return re.sub(r"\s+", " ", s).strip()[:300]
+
     # имя API-токена (label), если отправка пришла по API
     api_name = None
     if api_token_id:
@@ -64,31 +73,33 @@ def _log_send(payload: dict, res: dict, *, user_id, api_token_id, ext_username) 
             api_name = (t.label if t else None) or f"#{api_token_id}"
         except Exception:
             api_name = f"#{api_token_id}"
+    who = f"@{ext_username}" if ext_username else (f"id{user_id}" if user_id else "бот")
+    if ext_id:
+        who = f"{who} id{ext_id}"
+    ident = f"{api_name} · {who}" if api_name else who
+
     extra = payload.get("extra") or {}
     pname = extra.get("*PNAME*")
     price = extra.get("*PRICE*")
     ok = bool(res.get("ok"))
-    via = res.get("via") or "—"
-    when = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    svc = f"{payload.get('country') or '—'}/{payload.get('service') or '—'}"
+    when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    svc = payload.get("service") or "—"
     email = payload.get("email") or "?"
     link = payload.get("link") or "—"
-    answer = ("Отправлено" if ok
-              else (res.get("info") or "ошибка отправки").replace("\n", " ")[:300])
-    # многострочная карточка (plain text — каналы без parse_mode): поля по просьбе юзера.
-    # «Узел» = via (какая нода/локально) — виден и на успехе, и на ошибке.
-    lines = [
-        "✅ Отправка" if ok else "❌ Отправка",
-        f"API: {api_name} ({who})" if api_name else f"Кто: {who}",
-        f"Время: {when}",
-        f"Сервис: {svc}",
-        f"Почта: {email}",
-        f"Ссылка: {link}",
-        f"Товар: {pname if pname is not None else '—'}",
-        f"Цена: {price if price is not None else '—'}",
-        f"Узел: {res.get('addr') or via}",
-        f"Ответ: {answer}",
-    ]
+    short = res.get("short")
+    addr = res.get("addr") or res.get("via") or "—"
+    answer = "Отправлено" if ok else _clean_err(res.get("info"))
+
+    # карточка (plain text — каналы без parse_mode): без лишних подписей, по макету юзера.
+    lines = ["✅ Отправка" if ok else "❌ Отправка", "",
+             when, ident, svc, email, link]
+    if short and short != link:
+        lines.append(f"{short} (сокр.)")
+    if pname:
+        lines.append(str(pname))
+    if price:
+        lines.append(str(price))
+    lines += [str(addr), "", f"Ответ: {answer}"]
     msg = "\n".join(lines)
     # канал отправок — каждая попытка (ok и fail); канал ошибок (WARNING) — только fail
     log.info(msg, extra={"is_send": True})
@@ -268,7 +279,7 @@ async def send_payload(
     try:
         res = await _send_payload(payload, user_id=user_id, api_token_id=api_token_id,
                                   ext_id=ext_id, ext_username=ext_username, job_id=job_id)
-        _log_send(payload, res, user_id=user_id, api_token_id=api_token_id, ext_username=ext_username)
+        _log_send(payload, res, user_id=user_id, api_token_id=api_token_id, ext_username=ext_username, ext_id=ext_id)
         return res
     except Exception as e:
         log.exception("send_payload: внутренняя ошибка")
@@ -286,7 +297,7 @@ async def send_payload(
         except Exception as e2:
             log.warning("SendLog (после ошибки): %s", e2)
         res = {"ok": False, "info": info, "short": payload.get("link"), "from_disp": None, "via": "—"}
-        _log_send(payload, res, user_id=user_id, api_token_id=api_token_id, ext_username=ext_username)
+        _log_send(payload, res, user_id=user_id, api_token_id=api_token_id, ext_username=ext_username, ext_id=ext_id)
         return res
 
 
