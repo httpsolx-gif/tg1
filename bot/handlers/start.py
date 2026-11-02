@@ -1,6 +1,7 @@
 import logging
 from aiogram import Router, F
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.keyboards.main_menu import main_menu
@@ -11,12 +12,12 @@ router = Router()
 log = logging.getLogger("bot")
 
 @router.message(CommandStart())
-async def start(m: Message):
+async def start(m: Message, state: FSMContext):
     is_admin = (m.from_user.id in settings.admin_ids_set)
-    await m.answer(
-        "Привет! Выберите действие.",
-        reply_markup=main_menu(is_admin=is_admin),
-    )
+    # нижнее меню (📨/📋/🛠) + сразу выбор страны → сервиса, без лишнего шага
+    await m.answer("Привет!", reply_markup=main_menu(is_admin=is_admin))
+    from bot.handlers.flow_send import begin_send
+    await begin_send(m, state, greet="✉️ Отправка письма.")
 
 # Кнопку «✉ Отправить письмо» обрабатывает flow_send (см. bot/handlers/flow_send.py)
 

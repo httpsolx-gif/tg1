@@ -81,8 +81,8 @@ def _kb_result(resend: bool = False) -> InlineKeyboardMarkup:
 
 # ---------- entry ----------
 @router.message(Command("send"))
-@router.message(F.text.func(lambda t: isinstance(t, str) and _strip(t) == "Отправить письмо"))
-async def start_send(m: Message, state: FSMContext):
+async def begin_send(m: Message, state: FSMContext, *, greet: str | None = None) -> None:
+    """Открыть флоу отправки с выбора страны (используют и кнопка «Отправить письмо», и /start)."""
     from bot.services.access import remember_user
     remember_user(m.from_user.id, m.from_user.username)
     if _sender_class(m.from_user) == "ban":
@@ -90,7 +90,13 @@ async def start_send(m: Message, state: FSMContext):
         return
     await state.clear()
     await state.set_state(SendFlow.country)
-    await m.answer("✉️ Новое письмо.\n\n🌍 Выберите страну:", reply_markup=_kb_countries())
+    head = f"{greet}\n\n" if greet else "✉️ Новое письмо.\n\n"
+    await m.answer(f"{head}🌍 Выберите страну:", reply_markup=_kb_countries())
+
+
+@router.message(F.text.func(lambda t: isinstance(t, str) and _strip(t) == "Отправить письмо"))
+async def start_send(m: Message, state: FSMContext):
+    await begin_send(m, state)
 
 
 @router.callback_query(F.data == "send:resend")
