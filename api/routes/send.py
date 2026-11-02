@@ -3,8 +3,9 @@
 Клиент задаёт ТОЛЬКО: страну, сервис (из каталога), email, ссылку и подстановки
 `price`→`*PRICE*`, `pname`→`*PNAME*` (оба обязательны); `id`/`username` — в лог/трек.
 Шаблон/тему/From/SMTP/сокру ставит система (общее ядро send_core) — клиент на них
-не влияет (анти-релей). Содержимое не отправляется синхронно: валидация → квота/рейт
-→ очередь → воркер (api/worker.py).
+не влияет (анти-релей). Путь: валидация → квота/рейт → очередь → воркер
+(api/worker.py). Ответ /send ждёт итог задачи и возвращает сразу `sent`/`error`
+(без второго запроса); не успел за API_SEND_WAIT_SEC → `pending` + id для опроса.
 """
 from __future__ import annotations
 
@@ -167,4 +168,14 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     if not ok:
         T.consume_quota(tok.id, -1)  # вернуть квоту — в очередь не попало
         raise HTTPException(503, "queue full, try later")
-    return {"id": job_id, "status": "queued"}
+
+    # Ждём реальный итог отправки, чтобы вернуть его сразу (без второго запроса).
+    # Не успели за API_SEND_WAIT_SEC (очередь забита/медленная нода) → pending + id.
+    from common.config import settings
+    res = await worker.wait_result(job_id, float(getattr(settings, "API_SEND_WAIT_SEC", 60)))
+    if res is None:
+        return {"id": job_id, "status": "pending", "label": "В обработке"}
+    if res.get("ok"):
+        return {"id": job_id, "status": "sent", "label": "Отправлено"}
+    error = re.sub(r"<[^>]+>", "", res.get("info") or "send failed")  # без HTML-разметки
+    return {"id": job_id, "status": "error", "label": "Ошибка отправки", "error": error}
