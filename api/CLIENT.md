@@ -53,8 +53,8 @@ Content-Type: application/json
 | `link`        | да  | Ссылка (`http(s)://…`) — подставляется в кнопку письма |
 | `id`          | да  | Telegram **userid** (число) того, кто запускает отправку — для учёта, в письмо не идёт |
 | `username`    | да  | Telegram **@username** того же человека — для учёта, в письмо не идёт |
-| `price`       | нет | Цена товара **без валюты** (напр. `199`) → `*PRICE*` |
-| `predmetname` | нет | Название товара → `*PNAME*` |
+| `price`       | да  | Цена товара **без валюты** (напр. `199`) → `*PRICE*` |
+| `pname`       | да  | Название товара → `*PNAME*` |
 
 Пример:
 ```bash
@@ -69,7 +69,7 @@ curl -X POST https://grzl.cc/api/v1/send \
     "id": "123456789",
     "username": "@kesha",
     "price": "199",
-    "predmetname": "iPhone 15"
+    "pname": "iPhone 15"
   }'
 ```
 

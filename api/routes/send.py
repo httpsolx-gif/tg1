@@ -1,7 +1,7 @@
 """POST /api/v1/send — запуск отправки по токену (scope `send`) + GET /api/v1/catalog.
 
 Клиент задаёт ТОЛЬКО: страну, сервис (из каталога), email, ссылку и подстановки
-`price`→`*PRICE*`, `predmetname`→`*PNAME*`; `id`/`username` идут только в лог/трек.
+`price`→`*PRICE*`, `pname`→`*PNAME*` (оба обязательны); `id`/`username` — в лог/трек.
 Шаблон/тему/From/SMTP/сокру ставит система (общее ядро send_core) — клиент на них
 не влияет (анти-релей). Содержимое не отправляется синхронно: валидация → квота/рейт
 → очередь → воркер (api/worker.py).
@@ -34,8 +34,8 @@ class SendIn(BaseModel):
     link: str
     id: Optional[str] = None             # Telegram userid (обязателен) — в лог/учёт
     username: Optional[str] = None       # Telegram @username (обязателен) — в лог/учёт
-    price: Optional[str] = None          # цена товара без валюты → *PRICE*
-    predmetname: Optional[str] = None    # название товара → *PNAME*
+    price: Optional[str] = None          # цена товара без валюты → *PRICE* (обязательно)
+    pname: Optional[str] = None          # название товара → *PNAME* (обязательно)
 
 
 def _catalog() -> dict:
@@ -100,6 +100,12 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     if not tg_id.isdigit():
         raise HTTPException(422, "id must be telegram user id (numeric)")
 
+    # цена и название товара обязательны
+    price = str(body.price or "").strip()
+    pname = str(body.pname or "").strip()
+    if not price or not pname:
+        raise HTTPException(422, "price and pname are required")
+
     cat = _catalog()
     # страна/сервис — только из каталога и из разрешённых токену
     if body.country not in cat:
@@ -129,11 +135,7 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
 
     # собрать payload (рубрика по домену получателя; клиент контент не задаёт)
     from bot.services.send_core import build_payload, SendError
-    extra = {}
-    if body.price is not None:
-        extra["*PRICE*"] = body.price
-    if body.predmetname is not None:
-        extra["*PNAME*"] = body.predmetname
+    extra = {"*PRICE*": price, "*PNAME*": pname}
     try:
         payload = build_payload(
             country=body.country, service=body.service,

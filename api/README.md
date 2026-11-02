@@ -103,14 +103,14 @@ Authorization: Bearer mk_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
   "email":       "user@example.com",
   "link":        "https://target.example/path",
   "price":       "199 zł",
-  "predmetname": "iPhone 15",
+  "pname":       "iPhone 15",
   "id":          "777",
   "username":    "kesha"
 }
 ```
 - `country` + `service` — клиент выбирает из каталога (`GET /api/v1/catalog`); сервис
   также ∈ `allowed_services` токена.
-- `price` → плейсхолдер `*PRICE*` в шаблоне, `predmetname` → `*PNAME*` (сырые замены,
+- `price` → плейсхолдер `*PRICE*` в шаблоне, `pname` → `*PNAME*` (оба обязательны; сырые замены,
   как `MAIL_URL` для ссылки). `*DATE*` — **системный** плейсхолдер: текущая дата
   `ДД.ММ.ГГГГ` **в часовом поясе страны** получателя (`COUNTRY_TZ`, zoneinfo — DST
   учитывается), подставляется автоматически, клиент его НЕ передаёт.
