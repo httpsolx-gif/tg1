@@ -39,12 +39,17 @@ class SendIn(BaseModel):
     pname: Optional[str] = None          # название товара → *PNAME* (обязательно)
 
 
-def _catalog() -> dict:
-    """Доступные страны и сервисы (каталог в БД, п.61; только страны с сервисами)."""
+def _services() -> dict:
+    """Код страны → список сервисов (каталог в БД, п.61; только страны с сервисами).
+    Используется для валидации /send (ключ — чистый 2-буквенный код)."""
     from common import catalog
-    flags = {c.code: c.flag for c in catalog.countries()}
-    return {c: {"flag": flags.get(c, ""), "services": s}
-            for c, s in catalog.country_services(only_with_services=True).items()}
+    return catalog.country_services(only_with_services=True)
+
+
+def _norm_country(raw: str) -> str:
+    """Нормализовать код страны из запроса: убрать флаг/пробелы → «PL».
+    Клиент может прислать и «PL», и ключ каталога «🇵🇱 PL» — берём только буквы."""
+    return re.sub(r"[^A-Za-z]", "", raw or "").upper()
 
 
 # ---- простой in-memory рейт-лимит на токен (один процесс uvicorn) ----
@@ -66,8 +71,15 @@ def _rate_ok(tid: int, per_min: int) -> bool:
 
 @router.get("/catalog")
 async def catalog(tok=Depends(require_token("send"))):
-    """Список стран/сервисов, из которых клиент выбирает, куда слать."""
-    return {"countries": _catalog()}
+    """Список стран/сервисов, из которых клиент выбирает, куда слать.
+
+    Ключ — «<флаг> <код>» (напр. `🇵🇱 PL`), значение — список сервисов. В /send
+    передавайте 2-буквенный код страны (`PL`) и сервис из её списка."""
+    from common import catalog as cat
+    flags = {c.code: c.flag for c in cat.countries()}
+    countries = {f"{flags.get(code, '')} {code}".strip(): services
+                 for code, services in _services().items()}
+    return {"countries": countries}
 
 
 @router.get("/send/{job_id}")
@@ -107,11 +119,12 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     if not price or not pname:
         raise HTTPException(422, "price and pname are required")
 
-    cat = _catalog()
+    svc = _services()
     # страна/сервис — только из каталога и из разрешённых токену
-    if body.country not in cat:
+    country = _norm_country(body.country)  # принимаем и «PL», и ключ каталога «🇵🇱 PL»
+    if country not in svc:
         raise HTTPException(422, "unknown country")
-    if body.service not in cat[body.country]["services"]:
+    if body.service not in svc[country]:
         raise HTTPException(422, "unknown service for country")
     if not T.allows_service(tok, body.service):
         raise HTTPException(403, "service not allowed for token")
@@ -139,7 +152,7 @@ async def send(body: SendIn, tok=Depends(require_token("send"))):
     extra = {"*PRICE*": price, "*PNAME*": pname}
     try:
         payload = build_payload(
-            country=body.country, service=body.service,
+            country=country, service=body.service,
             email=email, link=link,
             sender_class="white", extra=extra or None,
         )

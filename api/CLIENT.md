@@ -22,15 +22,16 @@ GET /api/v1/catalog
 Authorization: Bearer <токен>
 ```
 
-Ответ:
+Ответ — ключ это `<флаг> <код страны>`, значение это список сервисов этой страны:
 ```json
 {
   "countries": {
-    "PL": { "flag": "🇵🇱", "services": ["myemail.pl", "testshop.pl"] },
-    "DE": { "flag": "🇩🇪", "services": ["myemail.de", "testshop.de"] }
+    "🇵🇱 PL": ["myemail.pl", "testshop.pl"],
+    "🇩🇪 DE": ["myemail.de", "testshop.de"]
   }
 }
 ```
+В `/send` передавайте **2-буквенный код** страны (`PL`) — флаг указывать не нужно.
 
 ---
 
